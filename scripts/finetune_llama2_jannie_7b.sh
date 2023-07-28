@@ -1,11 +1,11 @@
 NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 qlora.py \
     --ddp_find_unused_parameters False \
     --model_name_or_path TheBloke/Llama-2-7B-fp16 \
-    --output_dir ./output/llama-2-jannie-7b \
+    --output_dir ./output/LLaMA-2-Jannie-7B-QLoRA \
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
-    --save_steps 500 \
+    --save_steps 69420 \
     --save_total_limit 10 \
     --evaluation_strategy steps \
     --eval_dataset_size 1024 \

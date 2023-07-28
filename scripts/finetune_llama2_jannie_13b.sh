@@ -1,7 +1,7 @@
 NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 qlora.py \
     --ddp_find_unused_parameters False \
-    --model_name_or_path TheBloke/Llama-2-70B-fp16 \
-    --output_dir ./output/LLaMA-2-Jannie-70B-QLoRA \
+    --model_name_or_path TheBloke/Llama-2-13B-fp16 \
+    --output_dir ./output/LLaMA-2-Jannie-13B-QLoRA \
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
@@ -36,9 +36,9 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --gradient_accumulation_steps 2 \
     --max_steps 1875 \
     --eval_steps 187 \
-    --learning_rate 0.0001 \
+    --learning_rate 0.0002 \
     --adam_beta2 0.999 \
     --max_grad_norm 0.3 \
-    --lora_dropout 0.05 \
+    --lora_dropout 0.1 \
     --weight_decay 0.0 \
     --seed 0

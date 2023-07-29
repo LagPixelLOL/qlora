@@ -1,2 +1,0 @@
-scripts/finetune_llama2_jannie_13b.sh
-scripts/finetune_llama2_jannie_70b.sh

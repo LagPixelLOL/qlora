@@ -32,10 +32,10 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --dataset /home/ubuntu/jannie-log/jannie_log_train.jsonl \
     --source_max_len 1024 \
     --target_max_len 512 \
-    --per_device_train_batch_size 1 \
+    --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 2 \
-    --max_steps 1875 \
-    --eval_steps 187 \
+    --max_steps 2048 \
+    --eval_steps 205 \
     --learning_rate 0.0002 \
     --adam_beta2 0.999 \
     --max_grad_norm 0.3 \

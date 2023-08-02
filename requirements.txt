@@ -7,3 +7,5 @@ evaluate
 scikit-learn
 sentencepiece
 wandb
+protobuf==3.20.*
+numexpr>=2.8.4

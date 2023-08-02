@@ -5,7 +5,7 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
-    --save_steps 69420 \
+    --save_steps 750 \
     --save_total_limit 10 \
     --evaluation_strategy steps \
     --eval_dataset_size 1024 \
@@ -19,8 +19,8 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --do_train \
     --do_eval \
     --do_mmlu_eval False \
-    --lora_r 16 \
-    --lora_alpha 32 \
+    --lora_r 64 \
+    --lora_alpha 128 \
     --lora_modules all \
     --double_quant \
     --quant_type nf4 \
@@ -33,9 +33,9 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --source_max_len 1024 \
     --target_max_len 512 \
     --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 2 \
-    --max_steps 2048 \
-    --eval_steps 205 \
+    --gradient_accumulation_steps 8 \
+    --max_steps 3750 \
+    --eval_steps 375 \
     --learning_rate 0.0001 \
     --adam_beta2 0.999 \
     --max_grad_norm 0.3 \

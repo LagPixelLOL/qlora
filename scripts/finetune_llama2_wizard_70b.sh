@@ -5,7 +5,7 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
-    --save_steps 224 \
+    --save_steps 448 \
     --save_total_limit 10 \
     --evaluation_strategy steps \
     --eval_dataset_size 1024 \
@@ -20,7 +20,7 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --do_eval \
     --do_mmlu_eval False \
     --lora_r 64 \
-    --lora_alpha 128 \
+    --lora_alpha 16 \
     --lora_modules all \
     --double_quant \
     --quant_type nf4 \
@@ -30,7 +30,8 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --lr_scheduler_type constant \
     --gradient_checkpointing \
     --dataset /home/ubuntu/wizard/WizardLM_evol_instruct_V2_143k.jsonl \
-    --source_max_len 1024 \
+    --model_max_len 4096 \
+    --source_max_len 3584 \
     --target_max_len 512 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 8 \

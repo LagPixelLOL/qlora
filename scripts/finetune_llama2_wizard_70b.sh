@@ -1,4 +1,4 @@
-NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 qlora.py \
+NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 flash_qlora.py \
     --ddp_find_unused_parameters False \
     --model_name_or_path TheBloke/Llama-2-70B-fp16 \
     --output_dir ./output/LLaMA-2-Wizard-70B-QLoRA \
@@ -28,6 +28,7 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --bits 4 \
     --warmup_ratio 0.03 \
     --lr_scheduler_type constant \
+    --adam8bit \
     --gradient_checkpointing \
     --dataset /home/ubuntu/wizard/WizardLM_evol_instruct_V2_143k.jsonl \
     --model_max_len 4096 \

@@ -28,6 +28,7 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --bits 4 \
     --warmup_ratio 0.03 \
     --lr_scheduler_type constant \
+    --adam8bit \
     --gradient_checkpointing \
     --dataset /home/ubuntu/jannie-log/jannie_log_train.jsonl \
     --model_max_len 4096 \

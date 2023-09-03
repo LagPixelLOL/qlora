@@ -1,11 +1,11 @@
 NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 flash_qlora.py \
     --ddp_find_unused_parameters False \
-    --model_name_or_path TheBloke/Llama-2-7B-fp16 \
-    --output_dir ./output/LLaMA-2-Wizard-7B-QLoRA \
+    --model_name_or_path jondurbin/airoboros-l2-70b-2.1 \
+    --output_dir ./output/Airoboros-Jannie-70B-QLoRA \
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
-    --save_steps 69420 \
+    --save_steps 722 \
     --save_total_limit 10 \
     --evaluation_strategy steps \
     --eval_dataset_size 1024 \
@@ -30,17 +30,17 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --lr_scheduler_type constant \
     --adam8bit \
     --gradient_checkpointing \
-    --dataset /home/ubuntu/wizard/WizardLM_evol_instruct_V2_143k.jsonl \
+    --dataset /home/ubuntu/jannie-log/jannie_log_train.jsonl \
     --model_max_len 4096 \
     --source_max_len 3584 \
     --target_max_len 512 \
-    --per_device_train_batch_size 8 \
-    --gradient_accumulation_steps 2 \
-    --max_steps 1117 \
-    --eval_steps 112 \
-    --learning_rate 0.0002 \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 8 \
+    --max_steps 3610 \
+    --eval_steps 361 \
+    --learning_rate 0.0001 \
     --adam_beta2 0.999 \
     --max_grad_norm 0.3 \
-    --lora_dropout 0.1 \
+    --lora_dropout 0.05 \
     --weight_decay 0.0 \
     --seed 0

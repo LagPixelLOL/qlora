@@ -1,6 +1,6 @@
 NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 flash_qlora.py \
     --ddp_find_unused_parameters False \
-    --model_name_or_path jondurbin/airoboros-l2-70b-2.1 \
+    --model_name_or_path jondurbin/spicyboros-70b-2.2 \
     --output_dir ./output/Airoboros-Jannie-70B-QLoRA \
     --logging_steps 10 \
     --save_strategy steps \

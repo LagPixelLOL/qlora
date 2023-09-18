@@ -5,13 +5,13 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
-    --save_steps 69420 \
+    --save_steps 58 \
     --save_total_limit 10 \
     --evaluation_strategy steps \
-    --eval_dataset_size 32 \
+    --eval_dataset_size 512 \
     --max_eval_samples 1000 \
     --per_device_eval_batch_size 1 \
-    --max_new_tokens 32 \
+    --max_new_tokens 512 \
     --dataloader_num_workers 30 \
     --group_by_length \
     --logging_strategy steps \
@@ -36,8 +36,8 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --target_max_len 4095 \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 1 \
-    --max_steps 500 \
-    --eval_steps 50 \
+    --max_steps 576 \
+    --eval_steps 58 \
     --learning_rate 0.0002 \
     --adam_beta2 0.999 \
     --max_grad_norm 0.3 \

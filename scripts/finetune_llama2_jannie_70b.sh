@@ -1,4 +1,4 @@
-NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 flash_qlora.py \
+NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 qlora.py \
     --ddp_find_unused_parameters False \
     --model_name_or_path TheBloke/Llama-2-70B-fp16 \
     --output_dir ./output/LLaMA-2-Jannie-70B-QLoRA \

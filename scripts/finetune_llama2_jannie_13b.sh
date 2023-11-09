@@ -9,7 +9,6 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --save_total_limit 10 \
     --evaluation_strategy steps \
     --eval_dataset_size 1024 \
-    --max_eval_samples 1000 \
     --per_device_eval_batch_size 1 \
     --max_new_tokens 32 \
     --dataloader_num_workers 30 \

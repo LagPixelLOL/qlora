@@ -86,7 +86,7 @@ def main():
         )
         model = dequantize_model(model, tokenizer, to=f"{model_path}-dequantized")
     model = PeftModel.from_pretrained(model=model, model_id=adapter_path)
-    model = model.merge_and_unload()
+    model = model.merge_and_unload(progressbar=True)
     print("Successfully loaded and merged model, saving...")
     model.save_pretrained(args.out, safe_serialization=True, max_shard_size='10GB')
     tokenizer.save_pretrained(args.out)

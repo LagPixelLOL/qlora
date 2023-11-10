@@ -26,7 +26,7 @@ def main():
     print(f"Loading PEFT: {args.peft}")
     model = PeftModel.from_pretrained(base_model, args.peft)
     print(f"Running merge_and_unload")
-    model = model.merge_and_unload()
+    model = model.merge_and_unload(progressbar=True)
     tokenizer = AutoTokenizer.from_pretrained(args.base)
     model.save_pretrained(args.out, safe_serialization=True, max_shard_size='10GB')
     tokenizer.save_pretrained(args.out)

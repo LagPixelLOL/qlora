@@ -29,7 +29,7 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --lr_scheduler_type cosine \
     --adam8bit \
     --gradient_checkpointing \
-    --dataset /home/ubuntu/r-chatgpt-general-dump/merged_strings.jsonl \
+    --dataset /home/ubuntu/r-chatgpt-general-dump/merged_strings_train.jsonl \
     --model_max_len 4096 \
     --source_max_len 1 \
     --target_max_len 4095 \

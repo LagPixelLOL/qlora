@@ -704,10 +704,6 @@ def train():
 
     data_module = make_data_module(tokenizer, args, accelerator)
 
-    if accelerator.is_local_main_process:
-        for k, v in data_module.items():
-            print(k)
-
     trainer = Seq2SeqTrainer(
         model=model,
         tokenizer=tokenizer,

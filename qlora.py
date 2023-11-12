@@ -6,6 +6,7 @@ import copy
 import json
 import os
 from os.path import exists, join, isdir
+import shutil
 from dataclasses import dataclass, field
 import dataclasses
 import sys
@@ -29,8 +30,7 @@ from transformers import (
     set_seed,
     Seq2SeqTrainer,
     BitsAndBytesConfig,
-    LlamaTokenizer
-
+    LlamaTokenizer,
 )
 from datasets import load_dataset, Dataset
 import evaluate
@@ -39,11 +39,11 @@ from peft import (
     prepare_model_for_kbit_training,
     LoraConfig,
     get_peft_model,
-    PeftModel
+    PeftModel,
 )
 from peft.tuners.lora import LoraLayer
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-
+from accelerate import Accelerator
 
 def is_ipex_available():
     def get_major_and_minor_from_version(full_version):
@@ -84,10 +84,6 @@ class ModelArguments:
     trust_remote_code: Optional[bool] = field(
         default=False,
         metadata={"help": "Enable unpickling of arbitrary code in AutoModelForCausalLM#from_pretrained."}
-    )
-    use_auth_token: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Enables using Huggingface auth token from Git Credentials."}
     )
 
 @dataclass
@@ -261,19 +257,38 @@ def find_all_linear_names(args, model):
 
 
 class SavePeftModelCallback(transformers.TrainerCallback):
+
+    def __init__(self, trainer, **_):
+        self.trainer = trainer
+
     def save_model(self, args, state, kwargs):
-        print('Saving PEFT checkpoint...')
-        if state.best_model_checkpoint is not None:
-            checkpoint_folder = os.path.join(state.best_model_checkpoint, "adapter_model")
-        else:
-            checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
-
+        accelerator = self.trainer.accelerator
+        accelerator.wait_for_everyone()
+        accelerator.print('Saving PEFT checkpoint...')
+        checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
         peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
-        kwargs["model"].save_pretrained(peft_model_path)
 
-        pytorch_model_path = os.path.join(checkpoint_folder, "pytorch_model.bin")
-        if os.path.exists(pytorch_model_path):
-            os.remove(pytorch_model_path)
+        if getattr(self.trainer, "deepspeed"):
+            accelerator.print('Deepspeed saving...')
+            state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
+            unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
+            if accelerator.is_main_process:
+                unwrapped_model.save_pretrained(peft_model_path, state_dict=state_dict, safe_serialization=False)
+        else:
+            kwargs["model"].save_pretrained(peft_model_path, safe_serialization=False)
+
+        accelerator.wait_for_everyone()
+        if accelerator.is_local_main_process:
+            pytorch_model_path = os.path.join(checkpoint_folder, "pytorch_model.bin")
+            if os.path.exists(pytorch_model_path):
+                os.remove(pytorch_model_path)
+
+            try:
+                if os.path.exists(os.path.join(checkpoint_folder, f'global_step{state.global_step}')):
+                    print(f'Cleaning up global_step{state.global_step}')
+                    shutil.rmtree(os.path.join(checkpoint_folder, f'global_step{state.global_step}'))
+            except Exception as exc:
+                print(f'Failed to clean up global_step{state.global_step}: {exc}')
 
     def on_save(self, args, state, control, **kwargs):
         self.save_model(args, state, kwargs)
@@ -283,11 +298,10 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         def touch(fname, times=None):
             with open(fname, 'a'):
                 os.utime(fname, times)
-
-        touch(join(args.output_dir, 'completed'))
         self.save_model(args, state, kwargs)
+        touch(join(args.output_dir, 'completed'))
 
-def get_accelerate_model(args, checkpoint_dir):
+def get_accelerate_model(args, checkpoint_dir, accelerator):
 
     if torch.cuda.is_available():
         n_gpus = torch.cuda.device_count()
@@ -307,7 +321,7 @@ def get_accelerate_model(args, checkpoint_dir):
 
     if args.full_finetune: assert args.bits in [16, 32]
 
-    print(f'loading base model {args.model_name_or_path}...')
+    accelerator.print(f'Loading base model {args.model_name_or_path}...')
     compute_dtype = (torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
@@ -325,25 +339,24 @@ def get_accelerate_model(args, checkpoint_dir):
             bnb_4bit_use_double_quant=args.double_quant,
             bnb_4bit_quant_type=args.quant_type,
         ),
-        torch_dtype=(torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
+        torch_dtype=compute_dtype,
         trust_remote_code=args.trust_remote_code,
-        use_auth_token=args.use_auth_token,
         use_flash_attention_2=True,
     )
     if compute_dtype == torch.float16 and args.bits == 4:
         if torch.cuda.is_bf16_supported():
-            print('='*80)
-            print('Your GPU supports bfloat16, you can accelerate training with the argument --bf16')
-            print('='*80)
+            accelerator.print('='*80)
+            accelerator.print('Your GPU supports bfloat16, you can accelerate training with the argument --bf16')
+            accelerator.print('='*80)
             
     if compute_dtype == torch.float16 and (is_ipex_available() and torch.xpu.is_available()):
         compute_dtype = torch.bfloat16
-        print('Intel XPU does not support float16 yet, so switching to bfloat16')
+        accelerator.print('Intel XPU does not support float16 yet, so switching to bfloat16')
 
     setattr(model, 'model_parallel', True)
     setattr(model, 'is_parallelizable', True)
 
-    model.config.torch_dtype=(torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+    model.config.torch_dtype=compute_dtype
 
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -351,39 +364,38 @@ def get_accelerate_model(args, checkpoint_dir):
         cache_dir=args.cache_dir,
         padding_side="right",
         use_fast=False, # Fast tokenizer giving issues.
-        tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
         trust_remote_code=args.trust_remote_code,
-        use_auth_token=args.use_auth_token,
+        legacy=False,
     )
-    if tokenizer._pad_token is None:
-        smart_tokenizer_and_embedding_resize(
-            special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
-            tokenizer=tokenizer,
-            model=model,
-        )
-    if 'llama' in args.model_name_or_path or isinstance(tokenizer, LlamaTokenizer):
-        # LLaMA tokenizer may not have correct special tokens set.
-        # Check and add them if missing to prevent them from being parsed into different tokens.
-        # Note that these are present in the vocabulary.
-        # Note also that `model.config.pad_token_id` is 0 which corresponds to `<unk>` token.
-        print('Adding special tokens.')
-        tokenizer.add_special_tokens({
-                "eos_token": tokenizer.convert_ids_to_tokens(model.config.eos_token_id),
-                "bos_token": tokenizer.convert_ids_to_tokens(model.config.bos_token_id),
-                "unk_token": tokenizer.convert_ids_to_tokens(
-                    model.config.pad_token_id if (model.config.pad_token_id != -1 and model.config.pad_token_id != None) else tokenizer.pad_token_id
-                ),
-        })
-    
-    if not args.full_finetune:
+
+    tokenizer.pad_token_id = tokenizer.unk_token_id
+    tokenizer.pad_token = tokenizer.unk_token
+
+    # Resize token embeddings, if necessary, to accomodate fast tokenizer with added tokens.
+    num_new_tokens = len(tokenizer) - len(model.get_input_embeddings().weight.data)
+    if num_new_tokens > 0:
+        input_embeddings_data = model.get_input_embeddings().weight.data
+        output_embeddings_data = model.get_output_embeddings().weight.data
+
+        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
+        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+        input_embeddings_data[-num_new_tokens:] = input_embeddings_avg
+        output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
+        model.resize_token_embeddings(len(tokenizer))
+
+    if not args.full_finetune and args.bits in (8, 4):
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+
+    if args.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
 
     if not args.full_finetune:
         if checkpoint_dir is not None:
-            print("Loading adapters from checkpoint.")
+            accelerator.print("Loading adapters from checkpoint.")
             model = PeftModel.from_pretrained(model, join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
-            print(f'adding LoRA modules...')
+            accelerator.print(f'Adding LoRA modules...')
             modules = find_all_linear_names(args, model)
             config = LoraConfig(
                 r=args.lora_r,
@@ -393,6 +405,7 @@ def get_accelerate_model(args, checkpoint_dir):
                 bias="none",
                 task_type="CAUSAL_LM",
             )
+            model.enable_input_require_grads()
             model = get_peft_model(model, config)
 
     for name, module in model.named_modules():
@@ -400,16 +413,15 @@ def get_accelerate_model(args, checkpoint_dir):
             if args.bf16:
                 module = module.to(torch.bfloat16)
         if 'norm' in name:
-            # module = module.to(torch.float32)
-            if args.bf16:
-                module = module.to(torch.bfloat16)
+            module = module.to(torch.bfloat16 if args.bf16 else torch.float32)
         if 'lm_head' in name or 'embed_tokens' in name:
             if hasattr(module, 'weight'):
                 if args.bf16 and module.weight.dtype == torch.float32:
                     module = module.to(torch.bfloat16)
+
     return model, tokenizer
 
-def print_trainable_parameters(args, model):
+def print_trainable_parameters(args, model, accelerator):
     """
     Prints the number of trainable parameters in the model.
     """
@@ -420,33 +432,11 @@ def print_trainable_parameters(args, model):
         if param.requires_grad:
             trainable_params += param.numel()
     if args.bits == 4: trainable_params /= 2
-    print(
+    accelerator.print(
         f"trainable params: {trainable_params} || "
         f"all params: {all_param} || "
         f"trainable: {100 * trainable_params / all_param}"
     )
-
-def smart_tokenizer_and_embedding_resize(
-    special_tokens_dict: Dict,
-    tokenizer: transformers.PreTrainedTokenizer,
-    model: transformers.PreTrainedModel,
-):
-    """Resize tokenizer and embedding.
-
-    Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
-    """
-    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
-    model.resize_token_embeddings(len(tokenizer))
-    
-    if num_new_tokens > 0:
-        input_embeddings_data = model.get_input_embeddings().weight.data
-        output_embeddings_data = model.get_output_embeddings().weight.data
-
-        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
-        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
-
-        input_embeddings_data[-num_new_tokens:] = input_embeddings_avg
-        output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
 
 @dataclass
 class DataCollatorForCausalLM(object):
@@ -551,7 +541,7 @@ def local_dataset(dataset_name):
     split_dataset = full_dataset.train_test_split(test_size=0.1)
     return split_dataset
 
-def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
+def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelerator) -> Dict:
     """
     Make dataset and collator for supervised fine-tuning.
     Datasets are expected to have the following columns: { `input`, `output` }
@@ -645,7 +635,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         if 'eval' in dataset:
             eval_dataset = dataset['eval']
         else:
-            print('Splitting train dataset in train and validation according to `eval_dataset_size`')
+            accelerator.print('Splitting train dataset in train and validation according to `eval_dataset_size`')
             dataset = dataset["train"].train_test_split(
                 test_size=args.eval_dataset_size, shuffle=True, seed=42
             )
@@ -675,7 +665,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         data_collator=data_collator
     )
 
-def get_last_checkpoint(checkpoint_dir):
+def get_last_checkpoint(checkpoint_dir, accelerator):
     if isdir(checkpoint_dir):
         is_completed = exists(join(checkpoint_dir, 'completed'))
         if is_completed: return None, True # already finished
@@ -685,11 +675,12 @@ def get_last_checkpoint(checkpoint_dir):
                 max_step = max(max_step, int(filename.replace('checkpoint-', '')))
         if max_step == 0: return None, is_completed # training started, but no checkpoint
         checkpoint_dir = join(checkpoint_dir, f'checkpoint-{max_step}')
-        print(f"Found a previous checkpoint at: {checkpoint_dir}")
+        accelerator.print(f"Found a previous checkpoint at: {checkpoint_dir}")
         return checkpoint_dir, is_completed # checkpoint found!
     return None, False # first training
 
 def train():
+    accelerator = Accelerator()
     hfparser = transformers.HfArgumentParser((
         ModelArguments, DataArguments, TrainingArguments, GenerationArguments
     ))
@@ -699,30 +690,35 @@ def train():
     args = argparse.Namespace(
         **vars(model_args), **vars(data_args), **vars(training_args)
     )
-    print(args)
-    
-    checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
-    if completed_training:
-        print('Detected that training was already completed!')
+    accelerator.print(args)
 
-    model, tokenizer = get_accelerate_model(args, checkpoint_dir)
+    checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir, accelerator)
+    if completed_training:
+        accelerator.print('Detected that training was already completed!')
+
+    model, tokenizer = get_accelerate_model(args, checkpoint_dir, accelerator)
 
     model.config.use_cache = False
-    print('loaded model')
+    accelerator.print('Loaded model.')
     set_seed(args.seed)
 
-    data_module = make_data_module(tokenizer=tokenizer, args=args)
-    
+    data_module = make_data_module(tokenizer, args, accelerator)
+
+    if accelerator.is_local_main_process:
+        for k, v in data_module.items():
+            print(k)
+
     trainer = Seq2SeqTrainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        **{k:v for k,v in data_module.items() if k != 'predict_dataset'},
+        **{k: v for k, v in data_module.items() if k != 'predict_dataset'},
     )
+    accelerator = trainer.accelerator
 
     # Callbacks
     if not args.full_finetune:
-        trainer.add_callback(SavePeftModelCallback)
+        trainer.add_callback(SavePeftModelCallback(trainer))
     if args.do_mmlu_eval:
         if args.mmlu_dataset == 'mmlu-zs':
             mmlu_dataset = load_dataset("json", data_files={
@@ -787,7 +783,7 @@ def train():
         trainer.add_callback(MMLUEvalCallback)
 
     # Verifying the datatypes and parameter counts before training.
-    print_trainable_parameters(args, model)
+    print_trainable_parameters(args, model, accelerator)
     dtypes = {}
     for _, p in model.named_parameters():
         dtype = p.dtype
@@ -796,7 +792,7 @@ def train():
     total = 0
     for k, v in dtypes.items(): total+= v
     for k, v in dtypes.items():
-        print(k, v, v/total)
+        accelerator.print(k, v, v/total)
 
     all_metrics = {"run_name": args.run_name}
     # Training
@@ -837,7 +833,7 @@ def train():
         trainer.save_metrics("predict", prediction_metrics)
         all_metrics.update(prediction_metrics)
 
-    if (args.do_train or args.do_eval or args.do_predict):
+    if accelerator.is_local_main_process and (args.do_train or args.do_eval or args.do_predict):
         with open(os.path.join(args.output_dir, "metrics.json"), "w") as fout:
             fout.write(json.dumps(all_metrics))
 

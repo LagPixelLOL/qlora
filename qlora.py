@@ -30,7 +30,6 @@ from transformers import (
     set_seed,
     Seq2SeqTrainer,
     BitsAndBytesConfig,
-    LlamaTokenizer,
 )
 from datasets import load_dataset, Dataset
 import evaluate
@@ -66,7 +65,6 @@ def is_ipex_available():
         )
         return False
     return True
-    
 
 if torch.cuda.is_available():   
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -250,11 +248,9 @@ def find_all_linear_names(args, model):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
-
     if 'lm_head' in lora_module_names: # needed for 16-bit
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
-
 
 class SavePeftModelCallback(transformers.TrainerCallback):
 
@@ -302,7 +298,6 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         touch(join(args.output_dir, 'completed'))
 
 def get_accelerate_model(args, checkpoint_dir, accelerator):
-
     if torch.cuda.is_available():
         n_gpus = torch.cuda.device_count()
     if is_ipex_available() and torch.xpu.is_available():
@@ -318,11 +313,21 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         device_map = {'': local_rank}
         max_memory = {'': max_memory[local_rank]}
 
-
     if args.full_finetune: assert args.bits in [16, 32]
 
-    accelerator.print(f'Loading base model {args.model_name_or_path}...')
     compute_dtype = (torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
+    if compute_dtype == torch.float16 and args.bits == 4:
+        if torch.cuda.is_bf16_supported():
+            accelerator.print('='*80)
+            accelerator.print('Your GPU supports bfloat16, you can accelerate training with the argument --bf16.')
+            accelerator.print('='*80)
+
+    if compute_dtype == torch.float16 and (is_ipex_available() and torch.xpu.is_available()):
+        compute_dtype = torch.bfloat16
+        accelerator.print('Intel XPU does not support float16 yet, so switching to bfloat16.')
+
+    accelerator.print(f'Loading base model {args.model_name_or_path} with dtype {compute_dtype}...')
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         cache_dir=args.cache_dir,
@@ -343,15 +348,6 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         trust_remote_code=args.trust_remote_code,
         use_flash_attention_2=True,
     )
-    if compute_dtype == torch.float16 and args.bits == 4:
-        if torch.cuda.is_bf16_supported():
-            accelerator.print('='*80)
-            accelerator.print('Your GPU supports bfloat16, you can accelerate training with the argument --bf16')
-            accelerator.print('='*80)
-            
-    if compute_dtype == torch.float16 and (is_ipex_available() and torch.xpu.is_available()):
-        compute_dtype = torch.bfloat16
-        accelerator.print('Intel XPU does not support float16 yet, so switching to bfloat16')
 
     setattr(model, 'model_parallel', True)
     setattr(model, 'is_parallelizable', True)

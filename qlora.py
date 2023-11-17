@@ -42,7 +42,7 @@ from peft import (
 )
 from peft.tuners.lora import LoraLayer
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedType
 
 def is_ipex_available():
     def get_major_and_minor_from_version(full_version):
@@ -182,7 +182,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help":"Lora dropout."}
     )
     max_memory_MB: int = field(
-        default=80000,
+        default=696969,
         metadata={"help": "Free memory per gpu."}
     )
     report_to: str = field(
@@ -190,6 +190,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help": "To use wandb or something else for reporting."}
     )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints'})
+    safe_serialization: bool = field(default=True, metadata={"help": 'Save the trained model in safetensors format'})
     optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used'})
     per_device_train_batch_size: int = field(default=1, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
     gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step'})
@@ -207,6 +208,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_strategy: str = field(default='steps', metadata={"help": 'When to save checkpoints'})
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
+    use_flash_attention_2: bool = field(default=True, metadata={"help": 'Use flash attention 2 to load the model'})
 
 @dataclass
 class GenerationArguments:
@@ -240,15 +242,19 @@ class GenerationArguments:
     length_penalty: Optional[float] = field(default=1.0)
     no_repeat_ngram_size: Optional[int] = field(default=0)
 
+def is_deepspeed_zero_3(accelerator):
+    state = accelerator.state
+    return state.distributed_type == DistributedType.DEEPSPEED and state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage'] == 3
+
 def find_all_linear_names(args, model):
-    cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
+    nn_class = bnb.nn.Linear4bit if args.bits == 4 else bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear
     lora_module_names = set()
     for name, module in model.named_modules():
-        if isinstance(module, cls):
+        if isinstance(module, nn_class):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
-    if 'lm_head' in lora_module_names: # needed for 16-bit
+    if 'lm_head' in lora_module_names: # needed for 16 bits
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
 
@@ -269,9 +275,9 @@ class SavePeftModelCallback(transformers.TrainerCallback):
             state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
             if accelerator.is_main_process:
-                unwrapped_model.save_pretrained(peft_model_path, state_dict=state_dict, safe_serialization=False)
+                unwrapped_model.save_pretrained(peft_model_path, state_dict=state_dict, safe_serialization=args.safe_serialization)
         else:
-            kwargs["model"].save_pretrained(peft_model_path, safe_serialization=False)
+            kwargs["model"].save_pretrained(peft_model_path, safe_serialization=args.safe_serialization)
 
         accelerator.wait_for_everyone()
         if accelerator.is_local_main_process:
@@ -292,7 +298,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
 
     def on_train_end(self, args, state, control, **kwargs):
         def touch(fname, times=None):
-            with open(fname, 'a'):
+            with open(fname, "a", encoding="utf8"):
                 os.utime(fname, times)
         self.save_model(args, state, kwargs)
         touch(join(args.output_dir, 'completed'))
@@ -300,42 +306,39 @@ class SavePeftModelCallback(transformers.TrainerCallback):
 def get_accelerate_model(args, checkpoint_dir, accelerator):
     if torch.cuda.is_available():
         n_gpus = torch.cuda.device_count()
-    if is_ipex_available() and torch.xpu.is_available():
+    elif is_ipex_available() and torch.xpu.is_available():
         n_gpus = torch.xpu.device_count()
-        
+
     max_memory = f'{args.max_memory_MB}MB'
     max_memory = {i: max_memory for i in range(n_gpus)}
-    device_map = "auto"
+    if not is_deepspeed_zero_3(accelerator):
+        device_map = "auto"
 
     # if we are in a distributed setting, we need to set the device map and max memory per device
     if os.environ.get('LOCAL_RANK') is not None:
         local_rank = int(os.environ.get('LOCAL_RANK', '0'))
-        device_map = {'': local_rank}
+        if not is_deepspeed_zero_3(accelerator):
+            device_map = {'': local_rank}
         max_memory = {'': max_memory[local_rank]}
 
-    if args.full_finetune: assert args.bits in [16, 32]
-
-    compute_dtype = (torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32))
-    if compute_dtype == torch.float16 and args.bits == 4:
-        if torch.cuda.is_bf16_supported():
-            accelerator.print('='*80)
-            accelerator.print('Your GPU supports bfloat16, you can accelerate training with the argument --bf16.')
-            accelerator.print('='*80)
-
-    if compute_dtype == torch.float16 and (is_ipex_available() and torch.xpu.is_available()):
+    compute_dtype = torch.bfloat16 if args.bf16 else torch.float16 if args.fp16 else torch.float32
+    if compute_dtype == torch.float16 and is_ipex_available() and torch.xpu.is_available():
         compute_dtype = torch.bfloat16
-        accelerator.print('Intel XPU does not support float16 yet, so switching to bfloat16.')
+        accelerator.print('Intel XPU does not support float16 yet, so switched to bfloat16.')
+    if compute_dtype == torch.float16:
+        if torch.cuda.is_bf16_supported():
+            accelerator.print('=' * 80)
+            accelerator.print('Your GPU supports bfloat16, you can accelerate training with it by passing argument `--bf16`.')
+            accelerator.print('=' * 80)
 
-    accelerator.print(f'Loading base model {args.model_name_or_path} with dtype {compute_dtype}...')
+    accelerator.print(f'Loading base model {args.model_name_or_path}...')
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name_or_path,
-        cache_dir=args.cache_dir,
-        load_in_4bit=args.bits == 4,
-        load_in_8bit=args.bits == 8,
-        device_map=device_map,
-        max_memory=max_memory,
-        quantization_config=BitsAndBytesConfig(
+    load_args = {}
+    if args.bits in [4, 8]:
+        accelerator.print(f"Using {args.bits} bits quantization.")
+        load_args['load_in_4bit'] = args.bits == 4
+        load_args['load_in_8bit'] = args.bits == 8
+        load_args['quantization_config'] = BitsAndBytesConfig(
             load_in_4bit=args.bits == 4,
             load_in_8bit=args.bits == 8,
             llm_int8_threshold=6.0,
@@ -343,16 +346,28 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
             bnb_4bit_compute_dtype=compute_dtype,
             bnb_4bit_use_double_quant=args.double_quant,
             bnb_4bit_quant_type=args.quant_type,
-        ),
+        )
+    else:
+        accelerator.print(f"Using {args.bits} bits.")
+    accelerator.print(f"Using compute dtype {compute_dtype}.")
+
+    if not is_deepspeed_zero_3(accelerator):
+        load_args['device_map'] = device_map
+
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        cache_dir=args.cache_dir,
+        max_memory=max_memory,
         torch_dtype=compute_dtype,
         trust_remote_code=args.trust_remote_code,
-        use_flash_attention_2=True,
+        use_flash_attention_2=args.use_flash_attention_2,
+        **load_args
     )
 
     setattr(model, 'model_parallel', True)
     setattr(model, 'is_parallelizable', True)
 
-    model.config.torch_dtype=compute_dtype
+    model.config.torch_dtype = compute_dtype
 
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -380,7 +395,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
         model.resize_token_embeddings(len(tokenizer))
 
-    if not args.full_finetune and args.bits in (8, 4):
+    if not args.full_finetune and args.bits in [4, 8]:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
     if args.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
@@ -405,16 +420,8 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
             model = get_peft_model(model, config)
 
     for name, module in model.named_modules():
-        if isinstance(module, LoraLayer):
-            if args.bf16:
-                module = module.to(torch.bfloat16)
-        if 'norm' in name:
-            module = module.to(torch.bfloat16 if args.bf16 else torch.float32)
-        if 'lm_head' in name or 'embed_tokens' in name:
-            if hasattr(module, 'weight'):
-                if args.bf16 and module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
-
+        if isinstance(module, LoraLayer) or 'norm' in name or ('lm_head' in name or 'embed_tokens' in name) and hasattr(module, 'weight'):
+            module.to(compute_dtype)
     return model, tokenizer
 
 def print_trainable_parameters(args, model, accelerator):
@@ -486,23 +493,6 @@ class DataCollatorForCausalLM(object):
         if labels is not None:
             data_dict['labels'] = labels
         return data_dict
-
-def extract_unnatural_instructions_data(examples, extract_reformulations=False):
-    out = {
-        'input': [],
-        'output': [],
-    }
-    for example_instances in examples['instances']:
-        for instance in example_instances:
-            out['input'].append(instance['instruction_with_input'])
-            out['output'].append(instance['output'])
-    if extract_reformulations:
-        for example_reformulations in examples['reformulations']:
-            if example_reformulations is not None:
-                for instance in example_reformulations:
-                    out['input'].append(instance['instruction_with_input'])
-                    out['output'].append(instance['output'])
-    return out
 
 ALPACA_PROMPT_DICT = {
     "prompt_input": (
@@ -667,7 +657,7 @@ def get_last_checkpoint(checkpoint_dir, accelerator):
         if is_completed: return None, True # already finished
         max_step = 0
         for filename in os.listdir(checkpoint_dir):
-            if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint'):
+            if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint-'):
                 max_step = max(max_step, int(filename.replace('checkpoint-', '')))
         if max_step == 0: return None, is_completed # training started, but no checkpoint
         checkpoint_dir = join(checkpoint_dir, f'checkpoint-{max_step}')
@@ -676,17 +666,24 @@ def get_last_checkpoint(checkpoint_dir, accelerator):
     return None, False # first training
 
 def train():
-    accelerator = Accelerator()
-    hfparser = transformers.HfArgumentParser((
-        ModelArguments, DataArguments, TrainingArguments, GenerationArguments
-    ))
-    model_args, data_args, training_args, generation_args, extra_args = \
-        hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
+    hfparser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments, GenerationArguments))
+    model_args, data_args, training_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
     training_args = dataclasses.replace(training_args, generation_config=transformers.GenerationConfig(**vars(generation_args)))
-    args = argparse.Namespace(
-        **vars(model_args), **vars(data_args), **vars(training_args)
-    )
+    args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
+    assert args.bits in [4, 8, 16, 32], f"Invalid bits value \"{args.bits}\", please use one of [4, 8, 16, 32]."
+    accelerator = Accelerator()
+    if is_deepspeed_zero_3(accelerator) and args.bits not in [16, 32]:
+        args.bits = 16
+        accelerator.print("You can't use 4 or 8 bits when training with DeepSpeed ZeRO stage 3, automatically set bits to 16.")
+    if accelerator.state.distributed_type == DistributedType.DEEPSPEED and (args.bf16 or args.fp16):
+        assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \
+        "You are using (b)float16 training, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
+    if args.full_finetune:
+        assert args.bits in [16, 32], "You are doing full finetune but you are not using 16 or 32 bits."
+
+    accelerator.print('=' * 80)
     accelerator.print(args)
+    accelerator.print('=' * 80)
 
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir, accelerator)
     if completed_training:
@@ -815,7 +812,7 @@ def train():
         predictions = tokenizer.batch_decode(
             predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-        with open(os.path.join(args.output_dir, 'predictions.jsonl'), 'w') as fout:
+        with open(os.path.join(args.output_dir, "predictions.jsonl"), "w", encoding="utf8") as fout:
             for i, example in enumerate(data_module['predict_dataset']):
                 example['prediction_with_input'] = predictions[i].strip()
                 example['prediction'] = predictions[i].replace(example['input'], '').strip()
@@ -826,7 +823,7 @@ def train():
         all_metrics.update(prediction_metrics)
 
     if accelerator.is_local_main_process and (args.do_train or args.do_eval or args.do_predict):
-        with open(os.path.join(args.output_dir, "metrics.json"), "w") as fout:
+        with open(os.path.join(args.output_dir, "metrics.json"), "w", encoding="utf8") as fout:
             fout.write(json.dumps(all_metrics))
 
 if __name__ == "__main__":

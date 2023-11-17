@@ -20,7 +20,6 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --do_mmlu_eval False \
     --lora_r 64 \
     --lora_alpha 16 \
-    --lora_modules all \
     --double_quant \
     --quant_type nf4 \
     --bf16 \

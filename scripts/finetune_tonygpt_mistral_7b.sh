@@ -1,5 +1,4 @@
-NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 qlora.py \
-    --ddp_find_unused_parameters False \
+accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deepspeed --gradient_accumulation_steps 2 --zero_stage 3 --zero3_save_16bit_model True qlora.py \
     --model_name_or_path mistralai/Mistral-7B-v0.1 \
     --output_dir ./output/TonyGPT-Mistral-7B-QLoRA \
     --logging_steps 10 \
@@ -20,11 +19,10 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --do_mmlu_eval False \
     --lora_r 64 \
     --lora_alpha 16 \
-    --lora_modules all \
     --double_quant \
     --quant_type nf4 \
     --bf16 \
-    --bits 4 \
+    --bits 16 \
     --warmup_ratio 0.03 \
     --lr_scheduler_type cosine \
     --adam8bit \

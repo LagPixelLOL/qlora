@@ -7,7 +7,7 @@ What's the difference between this and the original:
 - A lot of fixes.
 
 Note:
-- MMLU eval is **BROKEN** in this repo, **DO NOT** use it, pass `--do_mmlu_eval False` to qlora.py disable it.
+- MMLU eval is **BROKEN** in this repo, **DO NOT** use it, pass `--do_mmlu_eval False` to qlora.py to disable it.
 - DeepSpeed ZeRO stage 3 doesn't support 4 and 8 bits, so this script automatically sets the bits to 16 when doing ZeRO stage 3 training.
 - Doesn't contain support for FSDP.
 

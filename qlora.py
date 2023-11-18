@@ -744,6 +744,14 @@ def train():
     accelerator.print(training_args)
     accelerator.print(separator)
 
+    if accelerator.is_local_main_process:
+        if accelerator.is_main_process:
+            print(f"Main process here with index {accelerator.process_index}.")
+        else:
+            print(f"Local main process here with index {accelerator.process_index}.")
+    else:
+        print(f"Worker process here with index {accelerator.process_index}.")
+
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir, accelerator)
     if completed_training:
         accelerator.print('Detected that training was already completed!')

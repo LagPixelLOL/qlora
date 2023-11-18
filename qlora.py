@@ -72,44 +72,55 @@ if torch.cuda.is_available():
 logger = logging.getLogger(__name__)
 
 IGNORE_INDEX = -100
-DEFAULT_PAD_TOKEN = "[PAD]"
 
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
-        default="EleutherAI/pythia-12b"
+        default="owolewd",
+        metadata={"help": "The model name in huggingface or the path to the local model folder."}
     )
     trust_remote_code: Optional[bool] = field(
         default=False,
-        metadata={"help": "Enable unpickling of arbitrary code in AutoModelForCausalLM#from_pretrained."}
+        metadata={"help": "Enable unpickling of arbitrary code in AutoModelForCausalLM.from_pretrained."}
+    )
+    model_max_context: Optional[int] = field(
+        default=None,
+        metadata={"help": "Set the max context length of the model, will default to the length from model config."}
+    )
+    rope_scaling_type: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The type of rope scaling, will default to NO rope scaling. You can use either \"linear\" or \"dynamic\", dynamic scaling is better than linear. "
+                    "NOTE: It's only available in a few models[LLaMA, Falcon, OpenLLaMA, GPT-NeoX, Fuyu, Phi, Persimmon], "
+                    "you CAN'T use it in other models, please check the transformers library document for more information."
+        }
+    )
+    rope_scaling_factor: Optional[float] = field(
+        default=None,
+        metadata={"help": "The scaling factor, must be > 1, the final model context length will be <model_max_context * rope_scaling_factor>, will default to no scaling."}
     )
 
 @dataclass
 class DataArguments:
     eval_dataset_size: int = field(
-        default=1024, metadata={"help": "Size of validation dataset."}
+        default=1024,
+        metadata={"help": "Size of validation dataset."}
     )
     max_train_samples: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "For debugging purposes or quicker training, truncate the number of training examples to this "
-            "value if set."
-        },
+        metadata={"help": "For debugging purposes or quicker training, truncate the number of training examples to this value if set."},
     )
     max_eval_samples: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
-            "value if set."
-        },
+        metadata={"help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this value if set."},
     )
     source_max_len: int = field(
         default=1024,
-        metadata={"help": "Maximum source sequence length. Sequences will be right padded (and possibly truncated)."},
+        metadata={"help": "Maximum source sequence length. Sequences will be right padded(And possibly truncated)."},
     )
     target_max_len: int = field(
         default=256,
-        metadata={"help": "Maximum target sequence length. Sequences will be right padded (and possibly truncated)."},
+        metadata={"help": "Maximum target sequence length. Sequences will be right padded(And possibly truncated)."},
     )
     dataset: str = field(
         default='alpaca',
@@ -117,13 +128,14 @@ class DataArguments:
     )
     dataset_format: Optional[str] = field(
         default=None,
-        metadata={"help": "Which dataset format is used. [alpaca|chip2|self-instruct|hh-rlhf]"}
+        metadata={"help": "Which dataset format is used[alpaca, chip2, self-instruct, hh-rlhf]."}
     )
 
 @dataclass
 class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     cache_dir: Optional[str] = field(
-        default=None
+        default=None,
+        metadata={"help": "If you want to use custom huggingface cache dir or not, will default to the default huggingface cache dir."}
     )
     train_on_source: Optional[bool] = field(
         default=False,
@@ -131,7 +143,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     mmlu_split: Optional[str] = field(
         default='eval',
-        metadata={"help": "The MMLU split to run on"}
+        metadata={"help": "The MMLU split to run on."}
     )
     mmlu_dataset: Optional[str] = field(
         default='mmlu-fs',
@@ -171,11 +183,11 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     lora_r: int = field(
         default=64,
-        metadata={"help": "Lora R dimension."}
+        metadata={"help": "LoRA R dimension(LoRA rank)."}
     )
     lora_alpha: float = field(
         default=16,
-        metadata={"help": " Lora alpha."}
+        metadata={"help": "LoRA alpha."}
     )
     lora_dropout: float = field(
         default=0.0,
@@ -189,26 +201,26 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default='none',
         metadata={"help": "To use wandb or something else for reporting."}
     )
-    output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints'})
-    safe_serialization: bool = field(default=True, metadata={"help": 'Save the trained model in safetensors format'})
-    optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used'})
+    output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints.'})
+    save_safetensors: bool = field(default=True, metadata={"help": 'Save the trained model in safetensors format.'})
+    optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used.'})
     per_device_train_batch_size: int = field(default=1, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
-    gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step'})
-    max_steps: int = field(default=10000, metadata={"help": 'How many optimizer update steps to take'})
-    weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW'}) # use lora dropout instead for regularization if needed
-    learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate'})
+    gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step.'})
+    max_steps: int = field(default=10000, metadata={"help": 'How many optimizer update steps to take.'})
+    weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW.'}) # use lora dropout instead for regularization if needed
+    learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate.'})
     remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
     gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
     do_train: bool = field(default=True, metadata={"help": 'To train or not to train, that is the question?'})
-    lr_scheduler_type: str = field(default='constant', metadata={"help": 'Learning rate schedule. Constant a bit better than cosine, and has advantage for analysis'})
-    warmup_ratio: float = field(default=0.03, metadata={"help": 'Fraction of steps to do a warmup for'})
-    logging_steps: int = field(default=10, metadata={"help": 'The frequency of update steps after which to log the loss'})
+    lr_scheduler_type: str = field(default='constant', metadata={"help": 'Learning rate schedule. Constant a bit better than cosine, and has advantage for analysis.'})
+    warmup_ratio: float = field(default=0.03, metadata={"help": 'Fraction of steps to do a warmup for.'})
+    logging_steps: int = field(default=10, metadata={"help": 'The frequency of update steps after which to log the loss.'})
     group_by_length: bool = field(default=True, metadata={"help": 'Group sequences into batches with same length. Saves memory and speeds up training considerably.'})
-    save_strategy: str = field(default='steps', metadata={"help": 'When to save checkpoints'})
-    save_steps: int = field(default=250, metadata={"help": 'How often to save a model'})
-    save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten'})
-    use_flash_attention_2: bool = field(default=True, metadata={"help": 'Use flash attention 2 to load the model'})
+    save_strategy: str = field(default='steps', metadata={"help": 'When to save checkpoints.'})
+    save_steps: int = field(default=250, metadata={"help": 'How often to save a model.'})
+    save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten.'})
+    use_flash_attention_2: bool = field(default=True, metadata={"help": 'Use flash attention 2 to load the model.'})
 
 @dataclass
 class GenerationArguments:
@@ -275,9 +287,9 @@ class SavePeftModelCallback(transformers.TrainerCallback):
             state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
             if accelerator.is_main_process:
-                unwrapped_model.save_pretrained(peft_model_path, state_dict=state_dict, safe_serialization=args.safe_serialization)
+                unwrapped_model.save_pretrained(peft_model_path, state_dict=state_dict, safe_serialization=args.save_safetensors)
         else:
-            kwargs["model"].save_pretrained(peft_model_path, safe_serialization=args.safe_serialization)
+            kwargs["model"].save_pretrained(peft_model_path, safe_serialization=args.save_safetensors)
 
         accelerator.wait_for_everyone()
         if accelerator.is_local_main_process:
@@ -334,6 +346,14 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     accelerator.print(f'Loading base model {args.model_name_or_path}...')
 
     load_args = {}
+    if isinstance(args.model_max_context, int):
+        load_args['max_position_embeddings'] = args.model_max_context
+        accelerator.print(f"Model max context length adjusted to {args.model_max_context} tokens.")
+    if isinstance(args.rope_scaling_type, str) and (isinstance(args.rope_scaling_factor, float) or isinstance(args.rope_scaling_factor, int)):
+        rope_scaling_setting_dict = {"type": args.rope_scaling_type, "factor": float(args.rope_scaling_factor)}
+        load_args['rope_scaling'] = rope_scaling_setting_dict
+        accelerator.print(f"Using rope scaling with setting: {rope_scaling_setting_dict}")
+
     if args.bits in [4, 8]:
         accelerator.print(f"Using {args.bits} bits quantization.")
         load_args['load_in_4bit'] = args.bits == 4
@@ -378,22 +398,13 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         trust_remote_code=args.trust_remote_code,
         legacy=False,
     )
-
-    tokenizer.pad_token_id = tokenizer.unk_token_id
-    tokenizer.pad_token = tokenizer.unk_token
-
-    # Resize token embeddings, if necessary, to accomodate fast tokenizer with added tokens.
-    num_new_tokens = len(tokenizer) - len(model.get_input_embeddings().weight.data)
-    if num_new_tokens > 0:
-        input_embeddings_data = model.get_input_embeddings().weight.data
-        output_embeddings_data = model.get_output_embeddings().weight.data
-
-        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
-        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
-
-        input_embeddings_data[-num_new_tokens:] = input_embeddings_avg
-        output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
-        model.resize_token_embeddings(len(tokenizer))
+    if not tokenizer.pad_token:
+        add_special_tokens_smart({"pad_token": "[PAD]"}, tokenizer, model, accelerator)
+        accelerator.print("Pad token doesn't exist in this model, so it's added.")
+    if not tokenizer.bos_token:
+        tokenizer.bos_token = tokenizer.eos_token
+        tokenizer.bos_token_id = tokenizer.eos_token_id
+        accelerator.print("Before of string token doesn't exist in this model, so it's set to the end of string token.")
 
     if not args.full_finetune and args.bits in [4, 8]:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
@@ -423,6 +434,29 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         if isinstance(module, LoraLayer) or 'norm' in name or ('lm_head' in name or 'embed_tokens' in name) and hasattr(module, 'weight'):
             module.to(compute_dtype)
     return model, tokenizer
+
+def add_special_tokens_smart(
+    special_tokens_dict: Dict,
+    tokenizer: transformers.PreTrainedTokenizer,
+    model: transformers.PreTrainedModel,
+    accelerator: Accelerator,
+):
+    """
+    Add new tokens, then resize tokenizer and embedding.
+    Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
+    """
+    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+    if num_new_tokens > 0:
+        accelerator.print(f"Added {num_new_tokens} new special token{'s' if num_new_tokens != 1 else ''}, resizing token embeddings...")
+        model.resize_token_embeddings(len(tokenizer))
+        input_embeddings_data = model.get_input_embeddings().weight.data
+        output_embeddings_data = model.get_output_embeddings().weight.data
+
+        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
+        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+        input_embeddings_data[-num_new_tokens:] = input_embeddings_avg
+        output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
 
 def print_trainable_parameters(args, model, accelerator):
     """
@@ -668,9 +702,13 @@ def get_last_checkpoint(checkpoint_dir, accelerator):
 def train():
     hfparser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments, GenerationArguments))
     model_args, data_args, training_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
+    assert not extra_args, "You passed extra args which are not used, please remove these args: " + str(extra_args)
     training_args = dataclasses.replace(training_args, generation_config=transformers.GenerationConfig(**vars(generation_args)))
     args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
+
+    # Args checks
     assert args.bits in [4, 8, 16, 32], f"Invalid bits value \"{args.bits}\", please use one of [4, 8, 16, 32]."
+
     accelerator = Accelerator()
     if is_deepspeed_zero_3(accelerator) and args.bits not in [16, 32]:
         args.bits = 16
@@ -678,12 +716,33 @@ def train():
     if accelerator.state.distributed_type == DistributedType.DEEPSPEED and (args.bf16 or args.fp16):
         assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \
         "You are using (b)float16 training, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
+
     if args.full_finetune:
         assert args.bits in [16, 32], "You are doing full finetune but you are not using 16 or 32 bits."
 
-    accelerator.print('=' * 80)
-    accelerator.print(args)
-    accelerator.print('=' * 80)
+    rope_scaling_valid_types = ['linear', 'dynamic']
+    if args.rope_scaling_type is not None or args.rope_scaling_factor is not None:
+        assert args.rope_scaling_type is not None, "You have rope scaling factor set but you didn't set a rope scaling type, please use one of " + str(rope_scaling_valid_types) + "."
+        assert args.rope_scaling_factor is not None, "You have rope scaling type set but you didn't set a rope scaling factor, please use any floating point number > 1."
+        assert args.rope_scaling_type in rope_scaling_valid_types, "Your rope scaling type setting is not valid, please use one of " + str(rope_scaling_valid_types) + "."
+        assert isinstance(args.rope_scaling_factor, float) or isinstance(args.rope_scaling_factor, int), "Your rope scaling factor setting is not a number."
+        assert args.rope_scaling_factor > 1, "Your rope scaling factor is less than or equal to 1, please use a higher setting."
+
+    separator = '=' * 80
+    accelerator.print('\nModel args:')
+    accelerator.print(separator)
+    accelerator.print(model_args)
+    accelerator.print(separator)
+
+    accelerator.print('\nData args:')
+    accelerator.print(separator)
+    accelerator.print(data_args)
+    accelerator.print(separator)
+
+    accelerator.print('\nTraining args:')
+    accelerator.print(separator)
+    accelerator.print(training_args)
+    accelerator.print(separator)
 
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir, accelerator)
     if completed_training:
@@ -827,4 +886,7 @@ def train():
             fout.write(json.dumps(all_metrics))
 
 if __name__ == "__main__":
-    train()
+    try:
+        train()
+    except KeyboardInterrupt:
+        print("Interrupted by CTRL+C, script terminated.")

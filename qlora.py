@@ -702,17 +702,23 @@ def get_last_checkpoint(checkpoint_dir, accelerator):
 def train():
     hfparser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments, GenerationArguments))
     model_args, data_args, training_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
+
+    # Args checks
     assert not extra_args, "You passed extra args which are not used, please remove these args: " + str(extra_args)
+    assert training_args.bits in [4, 8, 16, 32], f"Invalid bits value \"{training_args.bits}\", please use one of [4, 8, 16, 32]."
+    accelerator = Accelerator()
+    if is_deepspeed_zero_3(accelerator) and training_args.bits not in [16, 32]:
+        training_args.bits = 16
+        accelerator.print("You can't use 4 or 8 bits when training with DeepSpeed ZeRO stage 3, automatically set bits to 16.")
+
+    # Replace generation config
     training_args = dataclasses.replace(training_args, generation_config=transformers.GenerationConfig(**vars(generation_args)))
     args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
-    # Args checks
-    assert args.bits in [4, 8, 16, 32], f"Invalid bits value \"{args.bits}\", please use one of [4, 8, 16, 32]."
-
+    # Args checks again
+    # Accelerator needs to be re-initialized after training args re-init
+    # (At both hfparser.parse_args_into_dataclasses and dataclasses.replace) for some reason or the state object will be broken
     accelerator = Accelerator()
-    if is_deepspeed_zero_3(accelerator) and args.bits not in [16, 32]:
-        args.bits = 16
-        accelerator.print("You can't use 4 or 8 bits when training with DeepSpeed ZeRO stage 3, automatically set bits to 16.")
     if accelerator.state.distributed_type == DistributedType.DEEPSPEED and (args.bf16 or args.fp16):
         assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \
         "You are using (b)float16 training, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
@@ -771,6 +777,8 @@ def train():
         **{k: v for k, v in data_module.items() if k != 'predict_dataset'},
     )
     accelerator = trainer.accelerator
+    if accelerator.state.distributed_type == DistributedType.DEEPSPEED:
+        accelerator.print(f">>>>> DeepSpeed Training with ZeRO stage {accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage']}... <<<<<")
 
     # Callbacks
     if not args.full_finetune:

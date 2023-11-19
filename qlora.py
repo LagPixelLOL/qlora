@@ -283,7 +283,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
 
         if getattr(self.trainer, "deepspeed"):
-            accelerator.print('Deepspeed saving...')
+            accelerator.print('>>>>> DeepSpeed saving... <<<<<')
             state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
             if accelerator.is_main_process:
@@ -299,7 +299,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
 
             try:
                 if os.path.exists(os.path.join(checkpoint_folder, f'global_step{state.global_step}')):
-                    print(f'Cleaning up global_step{state.global_step}')
+                    print(f'Cleaning up global_step{state.global_step}...')
                     shutil.rmtree(os.path.join(checkpoint_folder, f'global_step{state.global_step}'))
             except Exception as exc:
                 print(f'Failed to clean up global_step{state.global_step}: {exc}')
@@ -309,11 +309,12 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
-        def touch(fname, times=None):
-            with open(fname, "a", encoding="utf8"):
-                os.utime(fname, times)
         self.save_model(args, state, kwargs)
-        touch(join(args.output_dir, 'completed'))
+        if self.trainer.accelerator.is_local_main_process:
+            os.makedirs(args.output_dir, exist_ok=True)
+            fname = join(args.output_dir, 'completed')
+            with open(fname, "a", encoding="utf8"):
+                os.utime(fname, None)
 
 def get_accelerate_model(args, checkpoint_dir, accelerator):
     if torch.cuda.is_available():
@@ -778,7 +779,7 @@ def train():
     )
     accelerator = trainer.accelerator
     if accelerator.state.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.print(f">>>>> DeepSpeed Training with ZeRO stage {accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage']}... <<<<<")
+        accelerator.print(f">>>>> DeepSpeed training with ZeRO stage {accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage']}... <<<<<")
 
     # Callbacks
     if not args.full_finetune:

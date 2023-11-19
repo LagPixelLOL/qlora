@@ -1,5 +1,3 @@
-
-
 # QLoRA: Efficient Finetuning of Quantized LLMs
 What's the difference between this and the original:
 - Flash attention support.
@@ -8,24 +6,31 @@ What's the difference between this and the original:
 
 Note:
 - MMLU eval is **BROKEN** in this repo, **DO NOT** use it, pass `--do_mmlu_eval False` to qlora.py to disable it.
-- DeepSpeed ZeRO stage 3 doesn't support 4 and 8 bits, so this script automatically sets the bits to 16 when doing ZeRO stage 3 training.
+- DeepSpeed ZeRO stage 3 doesn't support BnB 4 and 8 bits quant, so this script automatically sets the bits to 16 when doing ZeRO stage 3 training.
+- DeepSpeed ZeRO++ doesn't support BF16, you need to use FP16.
+- You need a **NEAR COMPLETE** DeepSpeed config for ZeRO++ to work or the script will throw a KeyError, because accelerate doesn't automatically generate a config when you manually pass in a DeepSpeed config.
 - Doesn't contain support for FSDP.
+
+PEFT training tested with:
+- DDP BnB 4 bits with compute dtype BF16 training of LLaMA 2 7B, 13B, 70B, and Mistral 7B on 8x A100 80G(1 node).
+- DeepSpeed ZeRO stage 2 BnB 4 bits with compute dtype BF16 training of Mistral 7B on 8x A100 80G(1 node).
+- DeepSpeed ZeRO stage 2 BnB 4 bits with compute dtype BF16 training of Mistral 7B on 16x A100 80G(2 nodes).
+- DeepSpeed ZeRO stage 3 BF16(stage 3 doesn't support BnB 4 and 8 bits quant) training of Falcon 180B on 8x A100 80G(1 node).
+- DeepSpeed ZeRO++ FP16(ZeRO++ qwZ doesn't support BF16) training of Mistral 7B on 16x A100 80G(2 nodes).
 
 # Original README
 
 | [Paper](https://arxiv.org/abs/2305.14314) | [Adapter Weights](https://huggingface.co/timdettmers) | [Demo](https://huggingface.co/spaces/uwnlp/guanaco-playground-tgi) | 
 
-This repo supports the paper "QLoRA: Efficient Finetuning of Quantized LLMs", an effort to democratize access to LLM research. 
-
+This repo supports the paper "QLoRA: Efficient Finetuning of Quantized LLMs", an effort to democratize access to LLM research.
 
 QLoRA uses [bitsandbytes](https://github.com/TimDettmers/bitsandbytes) for quantization and is integrated with Hugging Face's [PEFT](https://github.com/huggingface/peft) and [transformers](https://github.com/huggingface/transformers/) libraries. QLoRA was developed by members of the [University of Washington's UW NLP group](https://twitter.com/uwnlp?s=20).
 
 ## Updates
-- 7/19/2023 - Added LLaMA 2 example script and updated version requirements
-- 7/18/2023 - Fixed non-frozen embeddings when adding new tokens
+- 7/19/2023 - Added LLaMA 2 example script and updated version requirements.
+- 7/18/2023 - Fixed non-frozen embeddings when adding new tokens.
 
 ## Overview
-
 We present QLoRA, an efficient finetuning approach that reduces memory usage enough to finetune a 65B parameter model on a single 48GB GPU while preserving full 16-bit finetuning task performance. QLoRA backpropagates gradients through a frozen, 4-bit quantized pretrained language model into Low Rank Adapters (LoRA). Our best model family, which we name Guanaco, outperforms all previous openly released models on the Vicuna benchmark, reaching 99.3% of the performance level of ChatGPT while only requiring 24 hours of finetuning on a single GPU. QLoRA introduces a number of innovations to save memory without sacrificing performance: (a) 4-bit NormalFloat (NF4), a new data type that is information theoretically optimal for normally distributed weights (b) Double Quantization to reduce the average memory footprint by quantizing the quantization constants, and (c) Paged Optimizers to manage memory spikes. We use QLoRA to finetune more than 1,000 models, providing a detailed analysis of instruction following and chatbot performance across 8 instruction datasets, multiple model types (LLaMA, T5), and model scales that would be infeasible to run with regular finetuning (e.g. 33B and 65B parameter models). Our results show that QLoRA finetuning on a small high-quality dataset leads to state-of-the-art results, even when using smaller models than the previous SoTA. We provide a detailed analysis of chatbot performance based on both human and GPT-4 evaluations showing that GPT-4 evaluations are a cheap and reasonable alternative to human evaluation. Furthermore, we find that current chatbot benchmarks are not trustworthy to accurately evaluate the performance levels of chatbots. We release all of our models and code, including CUDA kernels for 4-bit training.
 
 ## License and Intended Use

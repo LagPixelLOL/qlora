@@ -27,7 +27,7 @@ accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deeps
     --lr_scheduler_type cosine \
     --adam8bit \
     --gradient_checkpointing \
-    --dataset /home/ubuntu/tonychase/tony_chase_train.jsonl \
+    --dataset /home/ubuntu/Tony-Chase-Transcripts/tony_chase_train.jsonl \
     --source_max_len 512 \
     --target_max_len 3584 \
     --per_device_train_batch_size 8 \

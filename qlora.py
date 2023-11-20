@@ -31,7 +31,7 @@ from transformers import (
     Seq2SeqTrainer,
     BitsAndBytesConfig,
 )
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, DatasetDict
 import evaluate
 
 from peft import (
@@ -559,8 +559,7 @@ def local_dataset(dataset_name):
     else:
         raise ValueError(f"Unsupported dataset format: {dataset_name}")
 
-    split_dataset = full_dataset.train_test_split(test_size=0.1)
-    return split_dataset
+    return DatasetDict({'train': full_dataset})
 
 def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelerator) -> Dict:
     """
@@ -639,15 +638,14 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
                 'output': x['text'],
             })
         elif dataset_format == 'input-output':
-            # leave as is
-            pass
+            pass # leave as is.
         # Remove unused columns.
         dataset = dataset.remove_columns(
             [col for col in dataset.column_names['train'] if col not in ['input', 'output']]
         )
         return dataset
 
-     # Load dataset.
+    # Load dataset.
     dataset = load_data(args.dataset)
     dataset = format_dataset(dataset, args.dataset_format)
 
@@ -656,7 +654,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
         if 'eval' in dataset:
             eval_dataset = dataset['eval']
         else:
-            accelerator.print('Splitting train dataset in train and validation according to `eval_dataset_size`')
+            accelerator.print('Splitting train dataset to train and validation according to `eval_dataset_size`...')
             dataset = dataset["train"].train_test_split(
                 test_size=args.eval_dataset_size, shuffle=True, seed=42
             )

@@ -399,13 +399,18 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         trust_remote_code=args.trust_remote_code,
         legacy=False,
     )
-    if not tokenizer.pad_token:
-        add_special_tokens_smart({"pad_token": "[PAD]"}, tokenizer, model, accelerator)
-        accelerator.print("Pad token doesn't exist in this model, so it's added.")
-    if not tokenizer.bos_token:
+    if tokenizer.pad_token is None:
+        if tokenizer.unk_token is not None:
+            tokenizer.pad_token = tokenizer.unk_token
+            tokenizer.pad_token_id = tokenizer.unk_token_id
+            accelerator.print("Pad token(pad) doesn't exist in this model, so it's set to unknown(unk) token.")
+        else:
+            add_special_tokens_smart({"pad_token": "[PAD]"}, tokenizer, model, accelerator)
+            accelerator.print("Pad token(pad) doesn't exist in this model, so it's added.")
+    if tokenizer.bos_token is None:
         tokenizer.bos_token = tokenizer.eos_token
         tokenizer.bos_token_id = tokenizer.eos_token_id
-        accelerator.print("Before of string token doesn't exist in this model, so it's set to the end of string token.")
+        accelerator.print("Before of string(bos) token doesn't exist in this model, so it's set to end of string(eos) token.")
 
     if not args.full_finetune and args.bits in [4, 8]:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
@@ -523,7 +528,7 @@ class DataCollatorForCausalLM(object):
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
         data_dict = {
             'input_ids': input_ids,
-            'attention_mask':input_ids.ne(self.tokenizer.pad_token_id),
+            'attention_mask': input_ids.ne(self.tokenizer.pad_token_id),
         }
         if labels is not None:
             data_dict['labels'] = labels
@@ -609,9 +614,9 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
                     full_dataset = local_dataset(dataset_name)
                     return full_dataset
                 except:
-                    raise ValueError(f"Error loading dataset from {dataset_name}")
+                    raise ValueError(f"Error loading dataset from {dataset_name}.")
             else:
-                raise NotImplementedError(f"Dataset {dataset_name} not implemented yet.")
+                raise NotImplementedError(f"Dataset {dataset_name} isn't implemented yet.")
 
     def format_dataset(dataset, dataset_format):
         if (

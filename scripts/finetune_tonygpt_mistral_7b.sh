@@ -16,7 +16,6 @@ accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deeps
     --remove_unused_columns False \
     --do_train \
     --do_eval \
-    --do_mmlu_eval False \
     --lora_r 64 \
     --lora_alpha 16 \
     --double_quant \

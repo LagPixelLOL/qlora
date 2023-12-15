@@ -355,13 +355,15 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     if not is_deepspeed_zero_3(accelerator):
         load_args['device_map'] = device_map
 
+    if args.use_flash_attention_2:
+        load_args["attn_implementation"] = "flash_attention_2"
+
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         max_memory=max_memory,
         torch_dtype=compute_dtype,
         trust_remote_code=args.trust_remote_code,
-        use_flash_attention_2=args.use_flash_attention_2,
         **load_args
     )
 
@@ -400,7 +402,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
 
     if not args.full_finetune:
         if checkpoint_dir is not None:
-            accelerator.print("Loading adapters from checkpoint.")
+            accelerator.print("Loading adapters from checkpoint...")
             model = PeftModel.from_pretrained(model, join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
             accelerator.print(f'Adding LoRA modules...')

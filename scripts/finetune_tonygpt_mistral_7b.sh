@@ -13,7 +13,6 @@ accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deeps
     --dataloader_num_workers 30 \
     --group_by_length \
     --logging_strategy steps \
-    --remove_unused_columns False \
     --do_train \
     --do_eval \
     --lora_r 64 \
@@ -28,7 +27,7 @@ accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deeps
     --gradient_checkpointing \
     --dataset /home/ubuntu/Tony-Chase-Transcripts/tony_chase_train.jsonl \
     --source_max_len 512 \
-    --target_max_len 3584 \
+    --target_max_len 32256 \
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 2 \
     --max_steps 208 \

@@ -14,7 +14,6 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --dataloader_num_workers 30 \
     --group_by_length \
     --logging_strategy steps \
-    --remove_unused_columns False \
     --do_train \
     --do_eval \
     --lora_r 64 \

@@ -187,9 +187,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     per_device_train_batch_size: int = field(default=1, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
     gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step.'})
     max_steps: int = field(default=10000, metadata={"help": 'How many optimizer update steps to take.'})
-    weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW.'}) # use lora dropout instead for regularization if needed
+    weight_decay: float = field(default=0.0, metadata={"help": 'The L2 weight decay rate of AdamW.'}) # Use lora dropout instead for regularization if needed.
     learning_rate: float = field(default=0.0002, metadata={"help": 'The learnign rate.'})
-    remove_unused_columns: bool = field(default=False, metadata={"help": 'Removed unused columns. Needed to make this codebase work.'})
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
     gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
     do_train: bool = field(default=True, metadata={"help": 'To train or not to train, that is the question?'})
@@ -246,7 +245,7 @@ def find_all_linear_names(args, model):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
 
-    if 'lm_head' in lora_module_names: # needed for 16 bits
+    if 'lm_head' in lora_module_names: # Needed for 16 bits
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
 
@@ -307,7 +306,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     if not is_deepspeed_zero_3(accelerator):
         device_map = "auto"
 
-    # if we are in a distributed setting, we need to set the device map and max memory per device
+    # If we are in a distributed setting, we need to set the device map and max memory per device
     if os.environ.get('LOCAL_RANK') is not None:
         local_rank = int(os.environ.get('LOCAL_RANK', '0'))
         if not is_deepspeed_zero_3(accelerator):
@@ -697,13 +696,15 @@ def train():
         training_args.bits = 16
         accelerator.print("You can't use 4 or 8 bits when training with DeepSpeed ZeRO stage 3, automatically set bits to 16.")
 
-    # Replace generation config
+    # Replace generation config.
     training_args = dataclasses.replace(training_args, generation_config=transformers.GenerationConfig(**vars(generation_args)))
+    # Need to set remove_unused_columns to False for the (Seq2Seq)Trainer to not delete columns.
+    training_args.remove_unused_columns = False
     args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
-    # Args checks again
+    # Args checks again.
     # Accelerator needs to be re-initialized after training args re-init
-    # (At both hfparser.parse_args_into_dataclasses and dataclasses.replace) for some reason or the state object will be broken
+    # (At both hfparser.parse_args_into_dataclasses and dataclasses.replace) for some reason or the state object will be broken.
     accelerator = Accelerator()
     if accelerator.state.distributed_type == DistributedType.DEEPSPEED and (args.bf16 or args.fp16):
         assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \

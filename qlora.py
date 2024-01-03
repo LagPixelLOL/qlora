@@ -192,6 +192,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     max_grad_norm: float = field(default=0.3, metadata={"help": 'Gradient clipping max norm. This is tuned and works well for all models tested.'})
     gradient_checkpointing: bool = field(default=True, metadata={"help": 'Use gradient checkpointing. You want to use this.'})
     do_train: bool = field(default=True, metadata={"help": 'To train or not to train, that is the question?'})
+    no_eval: bool = field(default=False, metadata={"help": 'When passed, disable eval.'})
     lr_scheduler_type: str = field(default='constant', metadata={"help": 'Learning rate schedule. Constant a bit better than cosine, and has advantage for analysis.'})
     warmup_ratio: float = field(default=0.03, metadata={"help": 'Fraction of steps to do a warmup for.'})
     logging_steps: int = field(default=10, metadata={"help": 'The frequency of update steps after which to log the loss.'})
@@ -700,6 +701,7 @@ def train():
     training_args = dataclasses.replace(training_args, generation_config=transformers.GenerationConfig(**vars(generation_args)))
     # Need to set remove_unused_columns to False for the (Seq2Seq)Trainer to not delete columns.
     training_args.remove_unused_columns = False
+    training_args.do_eval = not training_args.no_eval
     args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
     # Args checks again.

@@ -21,9 +21,9 @@ from packaging import version
 from packaging.version import parse
 
 import torch
-import transformers
 from torch.nn.utils.rnn import pad_sequence
 import argparse
+import transformers
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -248,6 +248,8 @@ def find_all_linear_names(args, model):
 
     if 'lm_head' in lora_module_names: # Needed for 16 bits
         lora_module_names.remove('lm_head')
+    if isinstance(model, transformers.MixtralForCausalLM):
+        lora_module_names.remove('w1'); lora_module_names.remove('w2'); lora_module_names.remove('w3')
     return list(lora_module_names)
 
 class SavePeftModelCallback(transformers.TrainerCallback):

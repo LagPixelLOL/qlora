@@ -439,14 +439,6 @@ def add_special_tokens_smart(
     if num_new_tokens > 0:
         accelerator.print(f"Added {num_new_tokens} new special token{'s' if num_new_tokens != 1 else ''}, resizing token embeddings...")
         model.resize_token_embeddings(len(tokenizer))
-        input_embeddings_data = model.get_input_embeddings().weight.data
-        output_embeddings_data = model.get_output_embeddings().weight.data
-
-        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
-        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
-
-        input_embeddings_data[-num_new_tokens:] = input_embeddings_avg
-        output_embeddings_data[-num_new_tokens:] = output_embeddings_avg
 
 def print_trainable_parameters(args, model, accelerator):
     """

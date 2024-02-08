@@ -1,11 +1,7 @@
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
-
 from collections import defaultdict
 import copy
 import json
 import os
-from os.path import exists, join, isdir
 import shutil
 from dataclasses import dataclass, field
 import dataclasses
@@ -261,28 +257,44 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         accelerator = self.trainer.accelerator
         accelerator.wait_for_everyone()
         accelerator.print('Saving PEFT checkpoint...')
-        checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
-        peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
+        checkpoint_dir = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
+        peft_model_dir = os.path.join(checkpoint_dir, "adapter_model")
 
-        if getattr(self.trainer, "deepspeed"):
+        adapter_model_safetensors_file = os.path.join(checkpoint_dir, "adapter_model.safetensors")
+        adapter_model_safetensors_is_file = os.path.isfile(adapter_model_safetensors_file)
+        adapter_model_bin_file = os.path.join(checkpoint_dir, "adapter_model.bin")
+        adapter_config_file = os.path.join(checkpoint_dir, "adapter_config.json")
+
+        if (adapter_model_safetensors_is_file or os.path.isfile(adapter_model_bin_file)) and os.path.isfile(adapter_config_file):
+            try:
+                accelerator.print("PEFT checkpoint already saved by the trainer, moving it to the target directory...")
+                os.makedirs(peft_model_dir, exist_ok=True)
+                shutil.move(adapter_config_file, peft_model_dir)
+                if adapter_model_safetensors_is_file:
+                    shutil.move(adapter_model_safetensors_file, peft_model_dir)
+                else:
+                    shutil.move(adapter_model_bin_file, peft_model_dir)
+            except Exception as e:
+                accelerator.print(f"Error occurred while moving the adapter model or adapter config: {e}")
+        elif getattr(self.trainer, "deepspeed"):
             accelerator.print('>>>>> DeepSpeed saving... <<<<<')
             state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
             if accelerator.is_main_process:
-                unwrapped_model.save_pretrained(peft_model_path, state_dict=state_dict, safe_serialization=args.save_safetensors)
+                unwrapped_model.save_pretrained(peft_model_dir, state_dict=state_dict, safe_serialization=args.save_safetensors)
         else:
-            kwargs["model"].save_pretrained(peft_model_path, safe_serialization=args.save_safetensors)
+            kwargs["model"].save_pretrained(peft_model_dir, safe_serialization=args.save_safetensors)
 
         accelerator.wait_for_everyone()
         if accelerator.is_local_main_process:
-            pytorch_model_path = os.path.join(checkpoint_folder, "pytorch_model.bin")
+            pytorch_model_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
             if os.path.exists(pytorch_model_path):
                 os.remove(pytorch_model_path)
 
             try:
-                if os.path.exists(os.path.join(checkpoint_folder, f'global_step{state.global_step}')):
+                if os.path.exists(os.path.join(checkpoint_dir, f'global_step{state.global_step}')):
                     print(f'Cleaning up global_step{state.global_step}...')
-                    shutil.rmtree(os.path.join(checkpoint_folder, f'global_step{state.global_step}'))
+                    shutil.rmtree(os.path.join(checkpoint_dir, f'global_step{state.global_step}'))
             except Exception as exc:
                 print(f'Failed to clean up global_step{state.global_step}: {exc}')
 
@@ -294,7 +306,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         self.save_model(args, state, kwargs)
         if self.trainer.accelerator.is_local_main_process:
             os.makedirs(args.output_dir, exist_ok=True)
-            fname = join(args.output_dir, 'completed')
+            fname = os.path.join(args.output_dir, 'completed')
             with open(fname, "a", encoding="utf8"):
                 os.utime(fname, None)
 
@@ -405,7 +417,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     if not args.full_finetune:
         if checkpoint_dir is not None:
             accelerator.print("Loading adapters from checkpoint...")
-            model = PeftModel.from_pretrained(model, join(checkpoint_dir, 'adapter_model'), is_trainable=True)
+            model = PeftModel.from_pretrained(model, os.path.join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
             accelerator.print(f'Adding LoRA modules...')
             modules = find_all_linear_names(args, model)
@@ -666,15 +678,15 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
     )
 
 def get_last_checkpoint(checkpoint_dir, accelerator):
-    if isdir(checkpoint_dir):
-        is_completed = exists(join(checkpoint_dir, 'completed'))
+    if os.path.isdir(checkpoint_dir):
+        is_completed = os.path.exists(os.path.join(checkpoint_dir, 'completed'))
         if is_completed: return None, True # already finished
         max_step = 0
         for filename in os.listdir(checkpoint_dir):
-            if isdir(join(checkpoint_dir, filename)) and filename.startswith('checkpoint-'):
+            if os.path.isdir(os.path.join(checkpoint_dir, filename)) and filename.startswith('checkpoint-'):
                 max_step = max(max_step, int(filename.replace('checkpoint-', '')))
         if max_step == 0: return None, is_completed # training started, but no checkpoint
-        checkpoint_dir = join(checkpoint_dir, f'checkpoint-{max_step}')
+        checkpoint_dir = os.path.join(checkpoint_dir, f'checkpoint-{max_step}')
         accelerator.print(f"Found a previous checkpoint at: {checkpoint_dir}")
         return checkpoint_dir, is_completed # checkpoint found!
     return None, False # first training

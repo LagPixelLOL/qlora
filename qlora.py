@@ -702,9 +702,9 @@ def train():
     # Accelerator needs to be re-initialized after training args re-init
     # (At both hfparser.parse_args_into_dataclasses and dataclasses.replace) for some reason or the state object will be broken.
     accelerator = Accelerator()
-    if accelerator.state.distributed_type == DistributedType.DEEPSPEED and (args.bf16 or args.fp16):
+    if is_deepspeed_zero_3(accelerator) and (args.bf16 or args.fp16):
         assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \
-        "You are using (b)float16 training, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
+        "You are using (b)float16 training with DeepSpeed ZeRO stage 3, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
 
     if args.full_finetune:
         assert args.bits in [16, 32], "You are doing full finetune but you are not using 16 or 32 bits."

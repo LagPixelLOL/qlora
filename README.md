@@ -5,7 +5,6 @@ What's the difference between this and the original:
 - A lot of fixes.
 
 Note:
-- MMLU eval is **BROKEN** in this repo, **DO NOT** use it, pass `--do_mmlu_eval False` to qlora.py to disable it.
 - DeepSpeed ZeRO stage 3 doesn't support BnB 4 and 8 bits quant, so this script automatically sets the bits to 16 when doing ZeRO stage 3 training.
 - DeepSpeed ZeRO++ doesn't support BF16, you need to use FP16.
 - You need a **NEAR COMPLETE** DeepSpeed config for ZeRO++ to work or the script will throw a KeyError, because accelerate doesn't automatically generate a config when you manually pass in a DeepSpeed config.
@@ -85,20 +84,20 @@ Quantization parameters are controlled from the `BitsandbytesConfig` ([see HF do
 - Nested quantization is activated through `bnb_4bit_use_double_quant`
 - The datatype used for qunatization is specified with `bnb_4bit_quant_type`. Note that there are two supported quantization datatypes `fp4` (four bit float) and `nf4` (normal four bit float). The latter is theoretically optimal for normally distributed weights and we recommend using `nf4`.
 
-```python
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name_or_path='/name/or/path/to/your/model',
+```py
+model = AutoModelForCausalLM.from_pretrained(
+    model_name_or_path='/name/or/path/to/your/model',
+    load_in_4bit=True,
+    device_map='auto',
+    max_memory=max_memory,
+    torch_dtype=torch.bfloat16,
+    quantization_config=BitsAndBytesConfig(
         load_in_4bit=True,
-        device_map='auto',
-        max_memory=max_memory,
-        torch_dtype=torch.bfloat16,
-        quantization_config=BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type='nf4'
-        ),
-    )
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type='nf4'
+    ),
+)
 ```
 
 ### Paged Optimizer
@@ -126,24 +125,10 @@ You can specify the path to your dataset using the `--dataset` argument. If the 
 Multi GPU training and inference work out-of-the-box with Hugging Face's Accelerate. Note that the `per_device_train_batch_size` and `per_device_eval_batch_size` arguments are  global batch sizes unlike what their name suggest.
 
 When loading a model for training or inference on multiple GPUs you should pass something like the following to `AutoModelForCausalLM.from_pretrained()`:
-```python
+```py
 device_map = "auto"
 max_memory = {i: '46000MB' for i in range(torch.cuda.device_count())}
 ```
-
-
-## Sample Outputs
-We provide generations for the models described in the paper for both OA and Vicuna queries in the `eval/generations` folder. These are intended to foster further research on model evaluation and analysis.
-
-Can you distinguish ChatGPT from Guanaco? Give it a try! 
-You can access [the model response Colab here](https://colab.research.google.com/drive/1kK6xasHiav9nhiRUJjPMZb4fAED4qRHb?usp=sharing) comparing ChatGPT and Guanaco 65B on Vicuna prompts.
-
-## Evaluation
-We include scripts adapted from the FastChat repo to automatically evaluate model generations using GPT-4. We include script for comparisons relative to ChatGPT with scores out of 10 as well as "pairwise comparisons" with three class labeling (win, loose, or tie). These are found in the `eval` folder.
-
-To facilitate the replication of our evaluation and future work in this area, we release GPT-4 and human ratings of our systems. These are found under `eval/ratings-human` and `eval/ratings-gpt4`.
-
-More details can be found at `eval/EVAL_README.md`.
 
 ## Known Issues and Limitations
 Here a list of known issues and bugs. If your issue is not reported here, please open a new issue and describe the problem.
@@ -154,9 +139,6 @@ Here a list of known issues and bugs. If your issue is not reported here, please
 4. Make sure that `tokenizer.bos_token_id = 1` to avoid generation issues.
 5. If you get an this [issue](https://github.com/artidoro/qlora/issues/82) ("illegal memory access") then you should use a newer HF LLaMA conversion or downgrade your PyTorch version.
 6. Problems with adding new tokens outlined in #214. Embeddings need to be updated and stored/reloaded if you are adding new tokens.
- 
-
-
 
 ## Citation
 

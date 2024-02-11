@@ -139,7 +139,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     full_finetune: bool = field(
         default=False,
-        metadata={"help": "Finetune the entire model without adapters."}
+        metadata={"help": "Fine-tune the entire model without adapters."}
     )
     adam8bit: bool = field(
         default=False,
@@ -178,7 +178,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help": "To use wandb or something else for reporting."}
     )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints.'})
-    save_safetensors: bool = field(default=True, metadata={"help": 'Save the trained model in safetensors format.'})
+    save_as_safetensors: bool = field(default=True, metadata={"help": 'Save the trained model in safetensors format.'})
+    max_shard_size: str = field(default="10GB", metadata={"help": "Max shard size when saving model after full finetune."})
     optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used.'})
     per_device_train_batch_size: int = field(default=1, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
     gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step.'})
@@ -265,46 +266,54 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         adapter_model_bin_file = os.path.join(checkpoint_dir, "adapter_model.bin")
         adapter_config_file = os.path.join(checkpoint_dir, "adapter_config.json")
 
+        accelerator.wait_for_everyone()
         if (adapter_model_safetensors_is_file or os.path.isfile(adapter_model_bin_file)) and os.path.isfile(adapter_config_file):
-            try:
-                accelerator.print("PEFT checkpoint already saved by the trainer, moving it to the target directory...")
-                os.makedirs(peft_model_dir, exist_ok=True)
-                shutil.move(adapter_config_file, peft_model_dir)
-                if adapter_model_safetensors_is_file:
-                    shutil.move(adapter_model_safetensors_file, peft_model_dir)
-                else:
-                    shutil.move(adapter_model_bin_file, peft_model_dir)
-            except Exception as e:
-                accelerator.print(f"Error occurred while moving the adapter model or adapter config: {e}")
+            if accelerator.is_main_process:
+                try:
+                    print("PEFT checkpoint already saved by the trainer, moving it to the target directory...")
+                    os.makedirs(peft_model_dir, exist_ok=True)
+                    shutil.move(adapter_config_file, peft_model_dir)
+                    if adapter_model_safetensors_is_file:
+                        shutil.move(adapter_model_safetensors_file, peft_model_dir)
+                    else:
+                        shutil.move(adapter_model_bin_file, peft_model_dir)
+                except Exception as e:
+                    print(f"Error occurred while moving the adapter model or adapter config: {e}")
         elif getattr(self.trainer, "deepspeed"):
             accelerator.print('>>>>> DeepSpeed saving... <<<<<')
             state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
             if accelerator.is_main_process:
-                unwrapped_model.save_pretrained(peft_model_dir, state_dict=state_dict, safe_serialization=args.save_safetensors)
+                unwrapped_model.save_pretrained(peft_model_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors)
         else:
-            kwargs["model"].save_pretrained(peft_model_dir, safe_serialization=args.save_safetensors)
+            kwargs["model"].save_pretrained(peft_model_dir, safe_serialization=args.save_as_safetensors)
 
         accelerator.wait_for_everyone()
         if accelerator.is_local_main_process:
             pytorch_model_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
             if os.path.exists(pytorch_model_path):
                 os.remove(pytorch_model_path)
-
             try:
                 if os.path.exists(os.path.join(checkpoint_dir, f'global_step{state.global_step}')):
                     print(f'Cleaning up global_step{state.global_step}...')
                     shutil.rmtree(os.path.join(checkpoint_dir, f'global_step{state.global_step}'))
-            except Exception as exc:
-                print(f'Failed to clean up global_step{state.global_step}: {exc}')
+            except Exception as e:
+                print(f'Failed to clean up global_step{state.global_step}: {e}')
+        return checkpoint_dir
 
     def on_save(self, args, state, control, **kwargs):
         self.save_model(args, state, kwargs)
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
-        self.save_model(args, state, kwargs)
-        if self.trainer.accelerator.is_local_main_process:
+        accelerator = self.trainer.accelerator
+        checkpoint_dir = self.save_model(args, state, kwargs)
+        if accelerator.is_main_process:
+            try:
+                shutil.move(checkpoint_dir, os.path.join(args.output_dir, "final"))
+            except Exception as e:
+                print(f"Error occurred while moving the final output to the target directory: {e}")
+        if accelerator.is_local_main_process:
             os.makedirs(args.output_dir, exist_ok=True)
             fname = os.path.join(args.output_dir, 'completed')
             with open(fname, "a", encoding="utf8"):
@@ -315,6 +324,8 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         n_gpus = torch.cuda.device_count()
     elif is_ipex_available() and torch.xpu.is_available():
         n_gpus = torch.xpu.device_count()
+    else:
+        raise AssertionError("You must have 1 or more GPUs to use this script.")
 
     max_memory = f'{args.max_memory_MB}MB'
     max_memory = {i: max_memory for i in range(n_gpus)}
@@ -351,8 +362,6 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
 
     if args.bits in [4, 8]:
         accelerator.print(f"Using {args.bits} bits quantization.")
-        load_args['load_in_4bit'] = args.bits == 4
-        load_args['load_in_8bit'] = args.bits == 8
         load_args['quantization_config'] = BitsAndBytesConfig(
             load_in_4bit=args.bits == 4,
             load_in_8bit=args.bits == 8,
@@ -780,16 +789,19 @@ def train():
         trainer.add_callback(SavePeftModelCallback(trainer))
 
     # Verifying the datatypes and parameter counts before training.
-    print_trainable_parameters(args, model, accelerator)
-    dtypes = {}
-    for _, p in model.named_parameters():
-        dtype = p.dtype
-        if dtype not in dtypes: dtypes[dtype] = 0
-        dtypes[dtype] += p.numel()
-    total = 0
-    for k, v in dtypes.items(): total+= v
-    for k, v in dtypes.items():
-        accelerator.print(k, v, v/total)
+    try:
+        print_trainable_parameters(args, model, accelerator)
+        dtypes = {}
+        for _, p in model.named_parameters():
+            dtype = p.dtype
+            if dtype not in dtypes: dtypes[dtype] = 0
+            dtypes[dtype] += p.numel()
+        total = 0
+        for k, v in dtypes.items(): total+= v
+        for k, v in dtypes.items():
+            accelerator.print(k, v, v/total)
+    except Exception:
+        pass
 
     all_metrics = {"run_name": args.run_name}
     # Training
@@ -803,6 +815,22 @@ def train():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
         all_metrics.update(metrics)
+    # Full fine-tune saving
+    if args.full_finetune:
+        accelerator.wait_for_everyone()
+        accelerator.print("Saving full fine-tuned model...")
+        if getattr(trainer, "deepspeed"):
+            accelerator.print('>>>>> DeepSpeed saving... <<<<<')
+            state_dict = accelerator.get_state_dict(trainer.deepspeed)
+            unwrapped_model = accelerator.unwrap_model(trainer.deepspeed)
+        else:
+            state_dict = trainer.accelerator.get_state_dict(trainer.model)
+            unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+        if accelerator.is_main_process:
+            save_dir = os.path.join(args.output_dir, "final")
+            unwrapped_model.save_pretrained(save_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors, max_shard_size=args.max_shard_size)
+            tokenizer.save_pretrained(save_dir)
+        accelerator.wait_for_everyone()
     # Evaluation
     if args.do_eval:
         logger.info("*** Evaluate ***")
@@ -813,13 +841,11 @@ def train():
     # Prediction
     if args.do_predict:
         logger.info("*** Predict ***")
-        prediction_output = trainer.predict(test_dataset=data_module['predict_dataset'],metric_key_prefix="predict")
+        prediction_output = trainer.predict(test_dataset=data_module['predict_dataset'], metric_key_prefix="predict")
         prediction_metrics = prediction_output.metrics
         predictions = prediction_output.predictions
         predictions = np.where(predictions != -100, predictions, tokenizer.pad_token_id)
-        predictions = tokenizer.batch_decode(
-            predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
-        )
+        predictions = tokenizer.batch_decode(predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True)
         with open(os.path.join(args.output_dir, "predictions.jsonl"), "w", encoding="utf8") as fout:
             for i, example in enumerate(data_module['predict_dataset']):
                 example['prediction_with_input'] = predictions[i].strip()
@@ -834,8 +860,11 @@ def train():
         with open(os.path.join(args.output_dir, "metrics.json"), "w", encoding="utf8") as fout:
             fout.write(json.dumps(all_metrics))
 
-if __name__ == "__main__":
+def main():
     try:
         train()
     except KeyboardInterrupt:
-        print("Interrupted by CTRL+C, script terminated.")
+        print("Interrupted by user with sigint, script terminated.")
+
+if __name__ == "__main__":
+    main()

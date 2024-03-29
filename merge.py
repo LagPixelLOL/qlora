@@ -7,14 +7,16 @@ import argparse
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base", type=str)
-    parser.add_argument("--peft", type=str)
-    parser.add_argument("--out", type=str)
-    parser.add_argument("--push", action="store_true")
+    parser.add_argument("-b", "--base", type=str, required=True)
+    parser.add_argument("-p", "--peft", type=str, required=True)
+    parser.add_argument("-o", "--out", type=str, required=True)
+    parser.add_argument("-P", "--push", action="store_true")
 
-    parser.add_argument("-c", "--model_max_context", type=int)
-    parser.add_argument("-t", "--rope_scaling_type", type=str)
-    parser.add_argument("-f", "--rope_scaling_factor", type=float)
+    parser.add_argument("-r", "--trust-remote-code", action="store_true")
+    parser.add_argument("-C", "--cpu-only", action="store_true")
+    parser.add_argument("-c", "--model-max-context", type=int)
+    parser.add_argument("-t", "--rope-scaling-type", type=str)
+    parser.add_argument("-f", "--rope-scaling-factor", type=float)
 
     return parser.parse_args()
 
@@ -22,6 +24,8 @@ def main():
     args = get_args()
     print(f"Loading base model: {args.base}")
     load_args = {}
+    if not args.cpu_only:
+        load_args["device_map"] = "auto"
     if isinstance(args.model_max_context, int):
         load_args['max_position_embeddings'] = args.model_max_context
         print(f"Model max context length adjusted to {args.model_max_context} tokens.")
@@ -32,15 +36,15 @@ def main():
     base_model = AutoModelForCausalLM.from_pretrained(
         args.base,
         return_dict=True,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        torch_dtype="auto",
+        trust_remote_code=args.trust_remote_code,
         **load_args
     )
     print(f"Loading PEFT: {args.peft}")
     model = PeftModel.from_pretrained(base_model, args.peft)
     print(f"Running merge_and_unload...")
     model = model.merge_and_unload(progressbar=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.base)
+    tokenizer = AutoTokenizer.from_pretrained(args.base, trust_remote_code=args.trust_remote_code)
     model.save_pretrained(args.out, safe_serialization=True, max_shard_size='10GB')
     tokenizer.save_pretrained(args.out)
     if args.push:

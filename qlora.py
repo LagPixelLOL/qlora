@@ -240,10 +240,8 @@ def find_all_linear_names(args, model):
     lora_module_names = set()
     for name, module in model.named_modules():
         if isinstance(module, nn_class):
-            if model.__class__.__name__ == "DbrxForCausalLM" and (".ffn.experts.mlp.w1s." in name or ".ffn.experts.mlp.v1s." in name or ".ffn.experts.mlp.w2s." in name):
-                continue
             names = name.split('.')
-            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+            lora_module_names.add(names[-1])
 
     if 'lm_head' in lora_module_names: # Needed for 16 bits
         lora_module_names.remove('lm_head')

@@ -198,6 +198,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model.'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten.'})
     use_flash_attention_2: bool = field(default=True, metadata={"help": 'Use flash attention 2 to load the model.'})
+    no_mlp_moe_lora_module: bool = field(default=False, metadata={"help": 'Disable MLP MoE LoRA targeting in MoE models(Currently only working for Mixtral).'})
 
 @dataclass
 class GenerationArguments:
@@ -245,7 +246,7 @@ def find_all_linear_names(args, model):
 
     if 'lm_head' in lora_module_names: # Needed for 16 bits
         lora_module_names.remove('lm_head')
-    if isinstance(model, transformers.MixtralForCausalLM):
+    if args.no_mlp_moe_lora_module and isinstance(model, transformers.MixtralForCausalLM):
         lora_module_names.remove('w1'); lora_module_names.remove('w2'); lora_module_names.remove('w3')
     return list(lora_module_names)
 

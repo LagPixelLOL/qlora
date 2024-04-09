@@ -422,7 +422,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
     if args.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True})
 
     if not args.full_finetune:
         if checkpoint_dir is not None:

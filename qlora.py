@@ -28,7 +28,6 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from datasets import load_dataset, Dataset, DatasetDict
-import evaluate
 
 from peft import (
     prepare_model_for_kbit_training,
@@ -95,6 +94,10 @@ class ModelArguments:
         default=None,
         metadata={"help": "The scaling factor, must be > 1, the final model context length will be <model_max_context * rope_scaling_factor>, will default to no scaling."}
     )
+    additional_special_tokens: list[str] = field(
+        default_factory=list,
+        metadata={"help": "Additional special tokens to add."}
+    )
 
 @dataclass
 class DataArguments:
@@ -125,6 +128,13 @@ class DataArguments:
     dataset_format: Optional[str] = field(
         default=None,
         metadata={"help": "Which dataset format is used[alpaca, chip2, self-instruct, hh-rlhf]."}
+    )
+    tokenizer_use_legacy_behavior: bool = field(
+        default=True,
+        metadata={
+            "help": "If set to `True`, when tokenizing a token after a special token(For example `<s>`), a space will be prepended(`<special_token>example` to `<special_token> example`), "
+                    "otherwise a space won't be prepended."
+        }
     )
 
 @dataclass
@@ -240,20 +250,18 @@ def find_all_linear_names(args, model):
     nn_class = bnb.nn.Linear4bit if args.bits == 4 else bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear
     lora_module_names = set()
     for name, module in model.named_modules():
-        if isinstance(module, nn_class):
-            names = name.split('.')
-            lora_module_names.add(names[-1])
+        if isinstance(module, (nn_class, torch.nn.Embedding)):
+            lora_module_names.add(name.split('.')[-1])
 
-    if 'lm_head' in lora_module_names: # Needed for 16 bits
-        lora_module_names.remove('lm_head')
     if args.no_mlp_moe_lora_module and isinstance(model, transformers.MixtralForCausalLM):
         lora_module_names.remove('w1'); lora_module_names.remove('w2'); lora_module_names.remove('w3')
     return list(lora_module_names)
 
 class SavePeftModelCallback(transformers.TrainerCallback):
 
-    def __init__(self, trainer, **_):
+    def __init__(self, trainer, all_args):
         self.trainer = trainer
+        self.all_args = all_args
 
     def save_model(self, args, state, kwargs):
         accelerator = self.trainer.accelerator
@@ -269,6 +277,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
 
         accelerator.wait_for_everyone()
         if (adapter_model_safetensors_is_file or os.path.isfile(adapter_model_bin_file)) and os.path.isfile(adapter_config_file):
+            accelerator.wait_for_everyone()
             if accelerator.is_main_process:
                 try:
                     print("PEFT checkpoint already saved by the trainer, moving it to the target directory...")
@@ -285,9 +294,12 @@ class SavePeftModelCallback(transformers.TrainerCallback):
             state_dict = accelerator.get_state_dict(self.trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(self.trainer.deepspeed)
             if accelerator.is_main_process:
-                unwrapped_model.save_pretrained(peft_model_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors)
+                unwrapped_model.save_pretrained(peft_model_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors, save_embedding_layers=bool(self.all_args.additional_special_tokens))
         else:
-            kwargs["model"].save_pretrained(peft_model_dir, safe_serialization=args.save_as_safetensors)
+            kwargs["model"].save_pretrained(peft_model_dir, safe_serialization=args.save_as_safetensors, save_embedding_layers=bool(self.all_args.additional_special_tokens))
+
+        if accelerator.is_main_process and self.all_args.additional_special_tokens:
+            self.trainer.tokenizer.save_pretrained(peft_model_dir)
 
         accelerator.wait_for_everyone()
         if accelerator.is_local_main_process:
@@ -403,7 +415,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         padding_side="right",
         use_fast=False, # Fast tokenizer giving issues.
         trust_remote_code=args.trust_remote_code,
-        legacy=False,
+        legacy=args.tokenizer_use_legacy_behavior,
     )
     if tokenizer.pad_token is None:
         if tokenizer.unk_token is not None:
@@ -418,6 +430,10 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         tokenizer.bos_token_id = tokenizer.eos_token_id
         accelerator.print("Before of string(bos) token doesn't exist in this model, so it's set to end of string(eos) token.")
 
+    if args.additional_special_tokens:
+        accelerator.print(f"Adding additional special tokens: {args.additional_special_tokens}")
+        add_special_tokens_smart({"additional_special_tokens": args.additional_special_tokens}, tokenizer, model, accelerator)
+
     if not args.full_finetune and args.bits in [4, 8]:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
@@ -429,7 +445,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
             accelerator.print("Loading adapters from checkpoint...")
             model = PeftModel.from_pretrained(model, os.path.join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
-            accelerator.print(f'Adding LoRA modules...')
+            accelerator.print("Adding LoRA modules...")
             modules = find_all_linear_names(args, model)
             config = LoraConfig(
                 r=args.lora_r,
@@ -457,7 +473,7 @@ def add_special_tokens_smart(
     Add new tokens, then resize tokenizer and embedding.
     Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
     """
-    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict, False)
     if num_new_tokens > 0:
         accelerator.print(f"Added {num_new_tokens} new special token{'s' if num_new_tokens != 1 else ''}, resizing token embeddings...")
         model.resize_token_embeddings(len(tokenizer))
@@ -787,7 +803,7 @@ def train():
 
     # Callback
     if not args.full_finetune:
-        trainer.add_callback(SavePeftModelCallback(trainer))
+        trainer.add_callback(SavePeftModelCallback(trainer, args))
 
     # Verifying the datatypes and parameter counts before training.
     try:
@@ -798,10 +814,11 @@ def train():
             if dtype not in dtypes: dtypes[dtype] = 0
             dtypes[dtype] += p.numel()
         total = 0
-        for k, v in dtypes.items(): total+= v
         for k, v in dtypes.items():
-            accelerator.print(k, v, v/total)
-    except Exception:
+            total += v
+        for k, v in dtypes.items():
+            accelerator.print(k, v, v / total)
+    except:
         pass
 
     all_metrics = {"run_name": args.run_name}
@@ -825,8 +842,8 @@ def train():
             state_dict = accelerator.get_state_dict(trainer.deepspeed)
             unwrapped_model = accelerator.unwrap_model(trainer.deepspeed)
         else:
-            state_dict = trainer.accelerator.get_state_dict(trainer.model)
-            unwrapped_model = trainer.accelerator.unwrap_model(trainer.model)
+            state_dict = accelerator.get_state_dict(trainer.model)
+            unwrapped_model = accelerator.unwrap_model(trainer.model)
         if accelerator.is_main_process:
             save_dir = os.path.join(args.output_dir, "final")
             unwrapped_model.save_pretrained(save_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors, max_shard_size=args.max_shard_size)

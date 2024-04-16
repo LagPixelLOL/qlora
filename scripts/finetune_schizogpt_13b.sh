@@ -38,4 +38,5 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --max_grad_norm 0.3 \
     --lora_dropout 0.1 \
     --weight_decay 0.0 \
-    --seed 0
+    --seed 0 \
+    --additional_special_tokens '<username>' '<message>'

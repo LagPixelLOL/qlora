@@ -40,11 +40,16 @@ def main():
         trust_remote_code=args.trust_remote_code,
         **load_args
     )
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(args.peft, trust_remote_code=args.trust_remote_code)
+    except:
+        tokenizer = AutoTokenizer.from_pretrained(args.base, trust_remote_code=args.trust_remote_code)
+    base_model.resize_token_embeddings(len(tokenizer))
     print(f"Loading PEFT: {args.peft}")
-    model = PeftModel.from_pretrained(base_model, args.peft)
+    peft_model = PeftModel.from_pretrained(base_model, args.peft)
     print(f"Running merge_and_unload...")
-    model = model.merge_and_unload(progressbar=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.base, trust_remote_code=args.trust_remote_code)
+    model = peft_model.merge_and_unload(progressbar=True)
+    print("Saving merged model and tokenizer...")
     model.save_pretrained(args.out, safe_serialization=True, max_shard_size='10GB')
     tokenizer.save_pretrained(args.out)
     if args.push:

@@ -881,11 +881,13 @@ def train():
 def main():
     try:
         train()
+        return
     except Exception as e:
         if os.environ.get('LOCAL_RANK', '0') == '0':
             raise
     except KeyboardInterrupt:
         print("Interrupted by user with sigint, script terminated.")
+    sys.exit(1)
 
 if __name__ == "__main__":
     main()

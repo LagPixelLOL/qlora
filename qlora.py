@@ -299,6 +299,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
             kwargs["model"].save_pretrained(peft_model_dir, safe_serialization=args.save_as_safetensors, save_embedding_layers=bool(self.all_args.additional_special_tokens))
 
         if accelerator.is_main_process and self.all_args.additional_special_tokens:
+            accelerator.print("Saving tokenizer...")
             self.trainer.tokenizer.save_pretrained(peft_model_dir)
 
         accelerator.wait_for_everyone()

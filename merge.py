@@ -42,8 +42,10 @@ def main():
     )
     try:
         tokenizer = AutoTokenizer.from_pretrained(args.peft, trust_remote_code=args.trust_remote_code)
+        print("Using tokenizer from PEFT:", args.peft)
     except:
         tokenizer = AutoTokenizer.from_pretrained(args.base, trust_remote_code=args.trust_remote_code)
+        print("Using tokenizer from base:", args.base)
     base_model.resize_token_embeddings(len(tokenizer))
     print(f"Loading PEFT: {args.peft}")
     peft_model = PeftModel.from_pretrained(base_model, args.peft)

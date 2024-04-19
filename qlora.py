@@ -214,9 +214,9 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
 class GenerationArguments:
     # For more hyperparameters check:
     # https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationConfig
-    # Length arguments
+    # Length arguments.
     max_new_tokens: Optional[int] = field(
-        default=256,
+        default=128,
         metadata={"help": "Maximum number of new tokens to be generated in evaluation or prediction loops"
                           "if predict_with_generate is set."}
     )
@@ -225,17 +225,17 @@ class GenerationArguments:
         metadata={"help": "Minimum number of new tokens to generate."}
     )
 
-    # Generation strategy
-    do_sample: Optional[bool] = field(default=False)
+    # Generation strategy.
+    do_sample: Optional[bool] = field(default=True)
     num_beams: Optional[int] = field(default=1)
     num_beam_groups: Optional[int] = field(default=1)
     penalty_alpha: Optional[float] = field(default=None)
     use_cache: Optional[bool] = field(default=True)
 
-    # Hyperparameters for logit manipulation
+    # Hyperparameters for logit manipulation.
     temperature: Optional[float] = field(default=1.0)
     top_k: Optional[int] = field(default=50)
-    top_p: Optional[float] = field(default=1.0)
+    top_p: Optional[float] = field(default=0.9)
     typical_p: Optional[float] = field(default=1.0)
     diversity_penalty: Optional[float] = field(default=0.0)
     repetition_penalty: Optional[float] = field(default=1.0)
@@ -250,11 +250,16 @@ def find_all_linear_names(args, model):
     nn_class = bnb.nn.Linear4bit if args.bits == 4 else bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear
     lora_module_names = set()
     for name, module in model.named_modules():
-        if isinstance(module, (nn_class, torch.nn.Embedding)):
-            lora_module_names.add(name.split('.')[-1])
+        target_classes = (nn_class,)
+        if args.additional_special_tokens:
+            target_classes += (torch.nn.Embedding,)
+        if isinstance(module, target_classes):
+            lora_module_names.add(name.split(".")[-1])
 
+    if not args.additional_special_tokens:
+        lora_module_names.remove("lm_head")
     if args.no_mlp_moe_lora_module and isinstance(model, transformers.MixtralForCausalLM):
-        lora_module_names.remove('w1'); lora_module_names.remove('w2'); lora_module_names.remove('w3')
+        lora_module_names.remove("w1"); lora_module_names.remove("w2"); lora_module_names.remove("w3")
     return list(lora_module_names)
 
 class SavePeftModelCallback(transformers.TrainerCallback):
@@ -448,6 +453,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         else:
             accelerator.print("Adding LoRA modules...")
             modules = find_all_linear_names(args, model)
+            accelerator.print("Targeting modules:", modules)
             config = LoraConfig(
                 r=args.lora_r,
                 lora_alpha=args.lora_alpha,

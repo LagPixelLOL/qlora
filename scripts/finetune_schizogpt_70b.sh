@@ -1,6 +1,5 @@
-NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 qlora.py \
-    --ddp_find_unused_parameters False \
-    --model_name_or_path TheBloke/Llama-2-70B-fp16 \
+accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deepspeed --gradient_accumulation_steps 4 --zero_stage 3 --zero3_save_16bit_model True qlora.py \
+    --model_name_or_path v2ray/Llama-3-70B \
     --output_dir ./output/SchizoGPT-70B-QLoRA \
     --logging_steps 10 \
     --save_strategy steps \
@@ -21,16 +20,16 @@ NCCL_P2P_DISABLE=1 accelerate launch --num_processes 8 --num_cpu_threads_per_pro
     --double_quant \
     --quant_type nf4 \
     --bf16 \
-    --bits 4 \
+    --bits 16 \
     --warmup_ratio 0.03 \
     --lr_scheduler_type cosine \
     --adam8bit \
     --gradient_checkpointing \
     --dataset /home/ubuntu/r-chatgpt-general-dump/merged_strings_train.jsonl \
     --source_max_len 1 \
-    --target_max_len 4095 \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 8 \
+    --target_max_len 8191 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
     --max_steps 576 \
     --eval_steps 58 \
     --learning_rate 0.0001 \

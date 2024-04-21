@@ -364,9 +364,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         accelerator.print('Intel XPU does not support float16 yet, so switched to bfloat16.')
     if compute_dtype == torch.float16:
         if torch.cuda.is_bf16_supported():
-            accelerator.print('=' * 80)
-            accelerator.print('Your GPU supports bfloat16, you can accelerate training with it by passing argument `--bf16`.')
-            accelerator.print('=' * 80)
+            accelerator.print("=" * 80 + "\nYour GPU supports bfloat16, you can accelerate training with it by passing argument `--bf16`.\n" + "=" * 80)
 
     accelerator.print(f'Loading base model {args.model_name_or_path}...')
 
@@ -762,21 +760,8 @@ def train():
         assert isinstance(args.rope_scaling_factor, float) or isinstance(args.rope_scaling_factor, int), "Your rope scaling factor setting is not a number."
         assert args.rope_scaling_factor > 1, "Your rope scaling factor is less than or equal to 1, please use a higher setting."
 
-    separator = '=' * 80
-    accelerator.print('\nModel args:')
-    accelerator.print(separator)
-    accelerator.print(model_args)
-    accelerator.print(separator)
-
-    accelerator.print('\nData args:')
-    accelerator.print(separator)
-    accelerator.print(data_args)
-    accelerator.print(separator)
-
-    accelerator.print('\nTraining args:')
-    accelerator.print(separator)
-    accelerator.print(training_args)
-    accelerator.print(separator)
+    separator = "=" * 80
+    accelerator.print(f"\nModel args:\n{separator}\n{model_args}\n{separator}\n\nData args:\n{separator}\n{data_args}\n{separator}\n\nTraining args:\n{separator}\n{training_args}\n{separator}")
 
     if accelerator.is_local_main_process:
         if accelerator.is_main_process:
@@ -890,7 +875,9 @@ def main():
         train()
         return
     except Exception as e:
-        if os.environ.get('LOCAL_RANK', '0') == '0':
+        local_rank = os.environ.get("LOCAL_RANK", "0")
+        print(f"Error at rank {local_rank}:\n-----\n{e}\n-----")
+        if local_rank == "0":
             raise
     except KeyboardInterrupt:
         print("Interrupted by user with sigint, script terminated.")

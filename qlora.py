@@ -281,7 +281,12 @@ class SavePeftModelCallback(transformers.TrainerCallback):
         adapter_config_file = os.path.join(checkpoint_dir, "adapter_config.json")
 
         accelerator.wait_for_everyone()
-        if (adapter_model_safetensors_is_file or os.path.isfile(adapter_model_bin_file)) and os.path.isfile(adapter_config_file):
+        if (
+            os.path.isfile(os.path.join(peft_model_dir, "adapter_model.safetensors"))
+            or os.path.isfile(os.path.join(peft_model_dir, "adapter_model.bin"))
+        ) and os.path.isfile(os.path.join(peft_model_dir, "adapter_config.json")):
+            accelerator.print("PEFT checkpoint already in the target folder, skipping saving and moving...")
+        elif (adapter_model_safetensors_is_file or os.path.isfile(adapter_model_bin_file)) and os.path.isfile(adapter_config_file):
             accelerator.wait_for_everyone()
             if accelerator.is_main_process:
                 try:

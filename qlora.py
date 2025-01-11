@@ -209,6 +209,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten.'})
     use_flash_attention_2: bool = field(default=True, metadata={"help": 'Use flash attention 2 to load the model.'})
     no_mlp_moe_lora_module: bool = field(default=False, metadata={"help": 'Disable MLP MoE LoRA targeting in MoE models(Currently only working for Mixtral).'})
+    accelerator_config: dict = field(default_factory=lambda: {"use_configured_state": True}, metadata={"help": 'DO NOT MODIFY.'})
 
 @dataclass
 class GenerationArguments:
@@ -247,13 +248,12 @@ def is_deepspeed_zero_3(accelerator):
     return state.distributed_type == DistributedType.DEEPSPEED and state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage'] == 3
 
 def find_all_linear_names(args, model):
-    nn_class = bnb.nn.Linear4bit if args.bits == 4 else bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear
+    nn_classes = (torch.nn.Linear, bnb.nn.Linear4bit, bnb.nn.Linear8bitLt)
+    if args.additional_special_tokens:
+        nn_classes += (torch.nn.Embedding,)
     lora_module_names = set()
     for name, module in model.named_modules():
-        target_classes = (nn_class,)
-        if args.additional_special_tokens:
-            target_classes += (torch.nn.Embedding,)
-        if isinstance(module, target_classes):
+        if isinstance(module, nn_classes):
             lora_module_names.add(name.split(".")[-1])
 
     if not args.additional_special_tokens:
@@ -464,6 +464,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
                 lora_dropout=args.lora_dropout,
                 bias="none",
                 task_type="CAUSAL_LM",
+                use_rslora=True,
             )
             model.enable_input_require_grads()
             model = get_peft_model(model, config)
@@ -728,28 +729,26 @@ def get_last_checkpoint(checkpoint_dir, accelerator):
     return None, False # first training
 
 def train():
+    accelerator = Accelerator()
     hfparser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments, GenerationArguments))
     model_args, data_args, training_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
 
-    # Args checks
+    # Args checks.
     assert not extra_args, "You passed extra args which are not used, please remove these args: " + str(extra_args)
     assert training_args.bits in [4, 8, 16, 32], f"Invalid bits value \"{training_args.bits}\", please use one of [4, 8, 16, 32]."
-    accelerator = Accelerator()
     if is_deepspeed_zero_3(accelerator) and training_args.bits not in [16, 32]:
         training_args.bits = 16
         accelerator.print("You can't use 4 or 8 bits when training with DeepSpeed ZeRO stage 3, automatically set bits to 16.")
 
     # Replace generation config.
-    training_args = dataclasses.replace(training_args, generation_config=transformers.GenerationConfig(**vars(generation_args)))
+    training_args.generation_config = transformers.GenerationConfig(**vars(generation_args))
     # Need to set remove_unused_columns to False for the (Seq2Seq)Trainer to not delete columns.
     training_args.remove_unused_columns = False
     training_args.do_eval = not training_args.no_eval
+    training_args.deepspeed_plugin = None
     args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
     # Args checks again.
-    # Accelerator needs to be re-initialized after training args re-init
-    # (At both hfparser.parse_args_into_dataclasses and dataclasses.replace) for some reason or the state object will be broken.
-    accelerator = Accelerator()
     if is_deepspeed_zero_3(accelerator) and (args.bf16 or args.fp16):
         assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \
         "You are using (b)float16 training with DeepSpeed ZeRO stage 3, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."

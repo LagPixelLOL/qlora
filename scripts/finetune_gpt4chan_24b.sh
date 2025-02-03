@@ -1,6 +1,6 @@
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True accelerate launch --mixed_precision bf16 --num_processes 8 --num_cpu_threads_per_process 1 --use_deepspeed --gradient_accumulation_steps 2 --zero_stage 2 --zero3_save_16bit_model True qlora.py \
-    --model_name_or_path /root/data/llms/Llama-3.1-8B \
-    --output_dir ./output/GPT4chan-8B-QLoRA \
+    --model_name_or_path /root/data/llms/Mistral-Small-24B-Base-2501 \
+    --output_dir ./output/GPT4chan-24B-QLoRA \
     --logging_steps 10 \
     --save_strategy steps \
     --data_seed 42 \
@@ -27,7 +27,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True accelerate launch --mixed_preci
     --gradient_checkpointing \
     --dataset /root/4chan/merged_strings_train.jsonl \
     --source_max_len 1 \
-    --target_max_len 131071 \
+    --target_max_len 32767 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 2 \
     --max_steps 4000 \

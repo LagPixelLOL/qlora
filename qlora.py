@@ -129,13 +129,6 @@ class DataArguments:
         default=None,
         metadata={"help": "Which dataset format is used[alpaca, chip2, self-instruct, hh-rlhf]."}
     )
-    tokenizer_use_legacy_behavior: bool = field(
-        default=True,
-        metadata={
-            "help": "If set to `True`, when tokenizing a token after a special token(For example `<s>`), a space will be prepended(`<special_token>example` to `<special_token> example`), "
-                    "otherwise a space won't be prepended."
-        }
-    )
 
 @dataclass
 class TrainingArguments(transformers.Seq2SeqTrainingArguments):
@@ -422,9 +415,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         padding_side="right",
-        use_fast=False, # Fast tokenizer giving issues.
         trust_remote_code=args.trust_remote_code,
-        legacy=args.tokenizer_use_legacy_behavior,
     )
     if tokenizer.pad_token is None:
         if tokenizer.unk_token is not None:

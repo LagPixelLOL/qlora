@@ -405,6 +405,8 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         **load_args
     )
 
+    label_names = transformers.utils.generic.find_labels(model.__class__)
+
     setattr(model, 'model_parallel', True)
     setattr(model, 'is_parallelizable', True)
 
@@ -463,7 +465,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     for name, module in model.named_modules():
         if isinstance(module, LoraLayer) or 'norm' in name or ('lm_head' in name or 'embed_tokens' in name) and hasattr(module, 'weight'):
             module.to(compute_dtype)
-    return model, tokenizer
+    return model, label_names, tokenizer
 
 def add_special_tokens_smart(
     special_tokens_dict: Dict,
@@ -736,6 +738,8 @@ def train():
     # Need to set remove_unused_columns to False for the (Seq2Seq)Trainer to not delete columns.
     training_args.remove_unused_columns = False
     training_args.do_eval = not training_args.no_eval
+    if not training_args.do_eval:
+        training_args.eval_strategy = "no"
     training_args.deepspeed_plugin = None
     args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
@@ -770,7 +774,10 @@ def train():
     if completed_training:
         accelerator.print('Detected that training was already completed!')
 
-    model, tokenizer = get_accelerate_model(args, checkpoint_dir, accelerator)
+    model, label_names, tokenizer = get_accelerate_model(args, checkpoint_dir, accelerator)
+
+    training_args.label_names = label_names
+    args.label_names = label_names
 
     model.config.use_cache = False
     accelerator.print('Loaded model.')
@@ -780,7 +787,7 @@ def train():
 
     trainer = Seq2SeqTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         args=training_args,
         **{k: v for k, v in data_module.items() if k != 'predict_dataset'},
     )

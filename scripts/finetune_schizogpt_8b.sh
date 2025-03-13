@@ -6,7 +6,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True accelerate launch --num_process
     --data_seed 42 \
     --save_steps 58 \
     --save_total_limit 10 \
-    --evaluation_strategy steps \
+    --eval_strategy steps \
     --eval_dataset_size 512 \
     --per_device_eval_batch_size 1 \
     --max_new_tokens 512 \

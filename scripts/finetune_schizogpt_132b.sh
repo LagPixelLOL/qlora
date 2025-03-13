@@ -6,7 +6,7 @@ accelerate launch --num_processes 8 --num_cpu_threads_per_process 30 --use_deeps
     --data_seed 42 \
     --save_steps 58 \
     --save_total_limit 10 \
-    --evaluation_strategy steps \
+    --eval_strategy steps \
     --eval_dataset_size 512 \
     --per_device_eval_batch_size 1 \
     --max_new_tokens 512 \

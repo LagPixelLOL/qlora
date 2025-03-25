@@ -668,6 +668,14 @@ def train():
     if completed_training:
         accelerator.print('Detected that training was already completed!')
 
+    original_save_pretrained = transformers.PreTrainedModel.save_pretrained
+
+    def max_shard_size_fixed_save_pretrained(*__args, **kwargs):
+        kwargs["max_shard_size"] = args.max_shard_size
+        return original_save_pretrained(*__args, **kwargs)
+
+    transformers.PreTrainedModel.save_pretrained = max_shard_size_fixed_save_pretrained
+
     model, label_names, tokenizer = get_accelerate_model(args, checkpoint_dir, accelerator)
 
     training_args.label_names = label_names
@@ -729,6 +737,7 @@ def train():
             save_dir = os.path.join(args.output_dir, "final")
         final_model_dir = os.path.join(args.output_dir, f"checkpoint-{args.max_steps}")
         if os.path.isdir(final_model_dir):
+            accelerator.wait_for_everyone()
             if accelerator.is_main_process:
                 print("Checkpoint already saved by the trainer, moving it to the target directory...")
                 shutil.move(final_model_dir, save_dir)

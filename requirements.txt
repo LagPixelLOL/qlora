@@ -9,5 +9,5 @@ sentencepiece
 wandb
 flash-attn
 deepspeed
-protobuf==3.20.*
-numexpr>=2.8.4
+protobuf
+numexpr

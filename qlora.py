@@ -1,12 +1,12 @@
 from collections import defaultdict
-import copy
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 import dataclasses
 import sys
-from typing import Optional, Dict, Sequence
+from typing import Optional, Sequence
 import numpy as np
 from tqdm import tqdm
 import logging
@@ -115,7 +115,7 @@ class DataArguments:
     )
     dataset: str = field(
         default='uwu',
-        metadata={"help": "Which dataset to finetune on. See datamodule for options."}
+        metadata={"help": "Which dataset to fine-tune on. See datamodule for options."}
     )
 
 @dataclass
@@ -170,7 +170,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints.'})
     save_as_safetensors: bool = field(default=True, metadata={"help": 'Save the trained model in safetensors format.'})
-    max_shard_size: str = field(default="10GB", metadata={"help": "Max shard size when saving model after full finetune."})
+    max_shard_size: str = field(default="10GB", metadata={"help": "Max shard size when saving model after full fine-tune."})
     optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used.'})
     per_device_train_batch_size: int = field(default=1, metadata={"help": 'The training batch size per GPU. Increase for better speed.'})
     gradient_accumulation_steps: int = field(default=16, metadata={"help": 'How many gradients to accumulate before to perform an optimizer step.'})
@@ -200,8 +200,7 @@ class GenerationArguments:
     # Length arguments.
     max_new_tokens: Optional[int] = field(
         default=128,
-        metadata={"help": "Maximum number of new tokens to be generated in evaluation or prediction loops"
-                          "if predict_with_generate is set."}
+        metadata={"help": "Maximum number of new tokens to be generated in evaluation or prediction loops if predict_with_generate is set."}
     )
     min_new_tokens : Optional[int] = field(
         default=None,
@@ -451,7 +450,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     return model, label_names, tokenizer
 
 def add_special_tokens_smart(
-    special_tokens_dict: Dict,
+    special_tokens_dict: dict,
     tokenizer: transformers.PreTrainedTokenizer,
     model: transformers.PreTrainedModel,
     accelerator: Accelerator,
@@ -462,8 +461,8 @@ def add_special_tokens_smart(
     """
     num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict, False)
     if num_new_tokens > 0:
-        accelerator.print(f"Added {num_new_tokens} new special token{'s' if num_new_tokens != 1 else ''}, resizing token embeddings...")
-        model.resize_token_embeddings(len(tokenizer))
+        accelerator.print(f"Added {num_new_tokens} new special token{"s" if num_new_tokens != 1 else ""}, resizing token embeddings...")
+    model.resize_token_embeddings(len(tokenizer))
 
 def print_trainable_parameters(args, model, accelerator):
     """
@@ -487,81 +486,108 @@ class DataCollatorForCausalLM(object):
     tokenizer: transformers.PreTrainedTokenizer
     train_on_source: bool
     predict_with_generate: bool
+    contains_generation_mask: bool
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        # Extract elements
-        sources = [f"{self.tokenizer.bos_token}{example['input']}" for example in instances]
-        targets = [f"{example['output']}{self.tokenizer.eos_token}" for example in instances]
-        # Tokenize
-        tokenized_sources_with_prompt = self.tokenizer(
-            sources,
-            truncation=False,
-            add_special_tokens=False,
-        )
-        tokenized_targets = self.tokenizer(
-            targets,
-            truncation=False,
-            add_special_tokens=False,
-        )
-        # Build the input and labels for causal LM
+    def input_output_format(self, instances):
+        # Extract elements.
+        sources = [f"{self.tokenizer.bos_token}{example["input"]}" for example in instances]
+        targets = [f"{example["output"]}{self.tokenizer.eos_token}" for example in instances]
+        # Tokenize.
+        tokenized_sources_with_prompt = self.tokenizer(sources, truncation=False, add_special_tokens=False)
+        tokenized_targets = self.tokenizer(targets, truncation=False, add_special_tokens=False)
+        # Build the input and labels for causal LM.
         input_ids = []
         labels = []
         for tokenized_source, tokenized_target in zip(
-            tokenized_sources_with_prompt['input_ids'],
-            tokenized_targets['input_ids']
+            tokenized_sources_with_prompt["input_ids"],
+            tokenized_targets["input_ids"]
         ):
             if not self.predict_with_generate:
                 input_ids.append(torch.tensor(tokenized_source + tokenized_target))
                 if not self.train_on_source:
-                    labels.append(
-                        torch.tensor([IGNORE_INDEX for _ in range(len(tokenized_source))] + copy.deepcopy(tokenized_target))
-                    )
+                    labels.append(torch.tensor([IGNORE_INDEX for _ in range(len(tokenized_source))] + tokenized_target))
                 else:
-                    labels.append(torch.tensor(copy.deepcopy(tokenized_source + tokenized_target)))
+                    labels.append(torch.tensor(tokenized_source + tokenized_target))
             else:
                 input_ids.append(torch.tensor(tokenized_source))
-        # Apply padding
+        # Apply padding.
         input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX) if not self.predict_with_generate else None
-        data_dict = {
-            'input_ids': input_ids,
-            'attention_mask': input_ids.ne(self.tokenizer.pad_token_id),
-        }
+        data_dict = {"input_ids": input_ids, "attention_mask": input_ids.ne(self.tokenizer.pad_token_id)}
         if labels is not None:
-            data_dict['labels'] = labels
+            data_dict["labels"] = labels
         return data_dict
 
+    def messages_format(self, instances):
+        if self.tokenizer.chat_template is None:
+            raise NotImplementedError("Using messages format without chat template isn't implemented!")
+        if not self.train_on_source and not self.contains_generation_mask:
+            raise NotImplementedError("Not train on source isn't implemented for chat template that doesn't contain generation mask!")
+        if self.predict_with_generate:
+            raise NotImplementedError("Predict with generate isn't implemented for messages format!")
+
+        data_dict = self.tokenizer.apply_chat_template([message["messages"] for message in instances], return_tensors="pt", padding=True, return_dict=True, return_assistant_tokens_mask=True)
+        if not self.train_on_source:
+            assistant_masks = data_dict.pop("assistant_masks")
+            if not assistant_masks.any(-1).all():
+                raise ValueError("Some of the assistant masks for this batch doesn't contain any assistant generations, the chat template may be wrong!")
+            data_dict["labels"] = data_dict["input_ids"].masked_fill(assistant_masks == 0, IGNORE_INDEX)
+        attention_mask = data_dict["attention_mask"]
+        data_dict["position_ids"] = (attention_mask.cumsum(-1) - 1) * attention_mask
+        return data_dict
+
+    def __call__(self, instances: Sequence) -> dict[str, torch.Tensor]:
+        item = instances[0]
+        if "input" in item and "output" in item:
+            return self.input_output_format(instances)
+        if "messages" in item:
+            return self.messages_format(instances)
+        raise ValueError(f"Dataset with keys {list(item)} isn't supported!")
+
 def local_dataset(dataset_name):
-    if dataset_name.endswith('.json') or dataset_name.endswith('.jsonl'):
+    if dataset_name.endswith(".json") or dataset_name.endswith(".jsonl"):
         full_dataset = Dataset.from_json(path_or_paths=dataset_name)
-    elif dataset_name.endswith('.csv'):
+    elif dataset_name.endswith(".csv"):
         full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name))
-    elif dataset_name.endswith('.tsv'):
-        full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name, delimiter='\t'))
+    elif dataset_name.endswith(".tsv"):
+        full_dataset = Dataset.from_pandas(pd.read_csv(dataset_name, delimiter="\t"))
     else:
         raise ValueError(f"Unsupported dataset format: {dataset_name}")
+    return DatasetDict({"train": full_dataset})
 
-    return DatasetDict({'train': full_dataset})
+def get_item_length_input_output_format(item):
+    return len(item["input"]) + len(item["output"])
 
-def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelerator) -> Dict:
-    """
-    Make dataset and collator for supervised fine-tuning.
-    Datasets are expected to have the following columns: { `input`, `output` }
-    """
+def get_item_length_messages_format(item):
+    length = 0
+    for message in item["messages"]:
+        length += len(message["content"])
+    return length
+
+def get_item_length(item):
+    length = None
+    if "input" in item and "output" in item:
+        length = get_item_length_input_output_format(item)
+    elif "messages" in item:
+        length = get_item_length_messages_format(item)
+    if length is not None:
+        return {"length": length}
+    raise ValueError(f"Dataset with keys {list(item)} isn't supported!")
+
+def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelerator) -> dict:
+
     def load_data(dataset_name):
         if os.path.exists(dataset_name):
             try:
                 return local_dataset(dataset_name)
-            except:
-                raise ValueError(f"Error loading dataset from {dataset_name}.")
+            except Exception as e:
+                raise ValueError(f"Error loading dataset from {dataset_name}: {e}") from e
         else:
-            raise NotImplementedError(f"Dataset {dataset_name} isn't implemented yet.")
+            raise FileNotFoundError(f"Dataset path \"{dataset_name}\" doesn't exist!")
 
     def format_dataset(dataset):
         # Remove unused columns.
-        dataset = dataset.remove_columns(
-            [col for col in dataset.column_names['train'] if col not in ['input', 'output']]
-        )
+        dataset = dataset.remove_columns([col for col in dataset.column_names["train"] if col not in {"input", "output", "messages"}])
         return dataset
 
     # Load dataset.
@@ -581,18 +607,19 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
         if args.max_eval_samples is not None and len(eval_dataset) > args.max_eval_samples:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
         if args.group_by_length:
-            eval_dataset = eval_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
+            eval_dataset = eval_dataset.map(get_item_length)
     if args.do_train:
         train_dataset = dataset['train']
         if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
             train_dataset = train_dataset.select(range(args.max_train_samples))
         if args.group_by_length:
-            train_dataset = train_dataset.map(lambda x: {'length': len(x['input']) + len(x['output'])})
+            train_dataset = train_dataset.map(get_item_length)
 
     data_collator = DataCollatorForCausalLM(
         tokenizer=tokenizer,
         train_on_source=args.train_on_source,
         predict_with_generate=args.predict_with_generate,
+        contains_generation_mask=False if tokenizer.chat_template is None else bool(re.search(r"\{\%-?\s*generation\s*-?\%\}", tokenizer.chat_template)),
     )
     return dict(
         train_dataset=train_dataset if args.do_train else None,
@@ -643,7 +670,7 @@ def train():
         "You are using (b)float16 training with DeepSpeed ZeRO stage 3, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
 
     if args.full_finetune:
-        assert args.bits in [16, 32], "You are doing full finetune but you are not using 16 or 32 bits."
+        assert args.bits in [16, 32], "You are doing full fine-tune but you are not using 16 or 32 bits."
 
     rope_scaling_valid_types = ['linear', 'dynamic']
     if args.rope_scaling_type is not None or args.rope_scaling_factor is not None:
@@ -682,7 +709,7 @@ def train():
     args.label_names = label_names
 
     model.config.use_cache = False
-    accelerator.print('Loaded model.')
+    accelerator.print("Loaded model.")
     set_seed(args.seed)
 
     data_module = make_data_module(tokenizer, args, accelerator)
@@ -780,7 +807,7 @@ def train():
 
     if accelerator.is_local_main_process and (args.do_train or args.do_eval or args.do_predict):
         with open(os.path.join(args.output_dir, "metrics.json"), "w", encoding="utf8") as fout:
-            fout.write(json.dumps(all_metrics))
+            json.dump(all_metrics, fout, indent=2, ensure_ascii=False)
 
 def main():
     try:

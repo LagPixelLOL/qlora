@@ -26,8 +26,6 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True accelerate launch --num_process
     --adam8bit \
     --gradient_checkpointing \
     --dataset /home/ubuntu/r-chatgpt-general-dump/merged_strings_train.jsonl \
-    --source_max_len 1 \
-    --target_max_len 131071 \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 4 \
     --max_steps 576 \

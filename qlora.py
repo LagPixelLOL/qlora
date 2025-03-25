@@ -113,21 +113,9 @@ class DataArguments:
         default=None,
         metadata={"help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this value if set."},
     )
-    source_max_len: int = field(
-        default=1024,
-        metadata={"help": "Maximum source sequence length. Sequences will be right padded(And possibly truncated)."},
-    )
-    target_max_len: int = field(
-        default=256,
-        metadata={"help": "Maximum target sequence length. Sequences will be right padded(And possibly truncated)."},
-    )
     dataset: str = field(
-        default='alpaca',
+        default='uwu',
         metadata={"help": "Which dataset to finetune on. See datamodule for options."}
-    )
-    dataset_format: Optional[str] = field(
-        default=None,
-        metadata={"help": "Which dataset format is used[alpaca, chip2, self-instruct, hh-rlhf]."}
     )
 
 @dataclass
@@ -502,8 +490,6 @@ def print_trainable_parameters(args, model, accelerator):
 @dataclass
 class DataCollatorForCausalLM(object):
     tokenizer: transformers.PreTrainedTokenizer
-    source_max_len: int
-    target_max_len: int
     train_on_source: bool
     predict_with_generate: bool
 
@@ -514,13 +500,11 @@ class DataCollatorForCausalLM(object):
         # Tokenize
         tokenized_sources_with_prompt = self.tokenizer(
             sources,
-            max_length=self.source_max_len,
             truncation=True,
             add_special_tokens=False,
         )
         tokenized_targets = self.tokenizer(
             targets,
-            max_length=self.target_max_len,
             truncation=True,
             add_special_tokens=False,
         )
@@ -551,26 +535,6 @@ class DataCollatorForCausalLM(object):
         if labels is not None:
             data_dict['labels'] = labels
         return data_dict
-
-ALPACA_PROMPT_DICT = {
-    "prompt_input": (
-        "Below is an instruction that describes a task, paired with an input that provides further context. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response: "
-    ),
-    "prompt_no_input": (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Response: "
-    ),
-}
-
-def extract_alpaca_dataset(example):
-    if example.get("input", "") != "":
-        prompt_format = ALPACA_PROMPT_DICT["prompt_input"]
-    else:
-        prompt_format = ALPACA_PROMPT_DICT["prompt_no_input"]
-    return {'input': prompt_format.format(**example)}
 
 def local_dataset(dataset_name):
     if dataset_name.endswith('.json') or dataset_name.endswith('.jsonl'):
@@ -609,59 +573,15 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
 
     """
     def load_data(dataset_name):
-        if dataset_name == 'alpaca':
-            return load_dataset("tatsu-lab/alpaca")
-        elif dataset_name == 'alpaca-clean':
-            return load_dataset("yahma/alpaca-cleaned")
-        elif dataset_name == 'chip2':
-            return load_dataset("laion/OIG", data_files='unified_chip2.jsonl')
-        elif dataset_name == 'self-instruct':
-            return load_dataset("yizhongw/self_instruct", name='self_instruct')
-        elif dataset_name == 'hh-rlhf':
-            return load_dataset("Anthropic/hh-rlhf")
-        elif dataset_name == 'longform':
-            return load_dataset("akoksal/LongForm")
-        elif dataset_name == 'oasst1':
-            return load_dataset("timdettmers/openassistant-guanaco")
-        elif dataset_name == 'vicuna':
-            raise NotImplementedError("Vicuna data was not released.")
+        if os.path.exists(dataset_name):
+            try:
+                return local_dataset(dataset_name)
+            except:
+                raise ValueError(f"Error loading dataset from {dataset_name}.")
         else:
-            if os.path.exists(dataset_name):
-                try:
-                    args.dataset_format = args.dataset_format if args.dataset_format else "input-output"
-                    full_dataset = local_dataset(dataset_name)
-                    return full_dataset
-                except:
-                    raise ValueError(f"Error loading dataset from {dataset_name}.")
-            else:
-                raise NotImplementedError(f"Dataset {dataset_name} isn't implemented yet.")
+            raise NotImplementedError(f"Dataset {dataset_name} isn't implemented yet.")
 
-    def format_dataset(dataset, dataset_format):
-        if (
-            dataset_format == 'alpaca' or dataset_format == 'alpaca-clean' or
-            (dataset_format is None and args.dataset in ['alpaca', 'alpaca-clean'])
-        ):
-            dataset = dataset.map(extract_alpaca_dataset, remove_columns=['instruction'])
-        elif dataset_format == 'chip2' or (dataset_format is None and args.dataset == 'chip2'):
-            dataset = dataset.map(lambda x: {
-                'input': x['text'].split('\n<bot>: ')[0].replace('<human>: ', ''),
-                'output': x['text'].split('\n<bot>: ')[1],
-            })
-        elif dataset_format == 'self-instruct' or (dataset_format is None and args.dataset == 'self-instruct'):
-            for old, new in [["prompt", "input"], ["completion", "output"]]:
-                dataset = dataset.rename_column(old, new)
-        elif dataset_format == 'hh-rlhf' or (dataset_format is None and args.dataset == 'hh-rlhf'):
-            dataset = dataset.map(lambda x: {
-                'input': '',
-                'output': x['chosen']
-            })
-        elif dataset_format == 'oasst1' or (dataset_format is None and args.dataset == 'oasst1'):
-            dataset = dataset.map(lambda x: {
-                'input': '',
-                'output': x['text'],
-            })
-        elif dataset_format == 'input-output':
-            pass # leave as is.
+    def format_dataset(dataset):
         # Remove unused columns.
         dataset = dataset.remove_columns(
             [col for col in dataset.column_names['train'] if col not in ['input', 'output']]
@@ -670,9 +590,9 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
 
     # Load dataset.
     dataset = load_data(args.dataset)
-    dataset = format_dataset(dataset, args.dataset_format)
+    dataset = format_dataset(dataset)
 
-    # Split train/eval, reduce size
+    # Split train/eval, reduce size.
     if args.do_eval or args.do_predict:
         if 'eval' in dataset:
             eval_dataset = dataset['eval']
@@ -695,8 +615,6 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
 
     data_collator = DataCollatorForCausalLM(
         tokenizer=tokenizer,
-        source_max_len=args.source_max_len,
-        target_max_len=args.target_max_len,
         train_on_source=args.train_on_source,
         predict_with_generate=args.predict_with_generate,
     )

@@ -189,7 +189,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     save_steps: int = field(default=250, metadata={"help": 'How often to save a model.'})
     save_total_limit: int = field(default=40, metadata={"help": 'How many checkpoints to save before the oldest is overwritten.'})
     use_flash_attention_2: bool = field(default=True, metadata={"help": 'Use flash attention 2 to load the model.'})
-    no_mlp_moe_lora_module: bool = field(default=False, metadata={"help": 'Disable MLP MoE LoRA targeting in MoE models(Currently only working for Mixtral).'})
+    no_mlp_moe_lora_module: bool = field(default=False, metadata={"help": 'Disable MLP MoE LoRA targeting in MoE models (currently only working for Mixtral).'})
+    save_only_model: bool = field(default=True, metadata={"help": 'Do not save the optimizer states.'})
     accelerator_config: dict = field(default_factory=lambda: {"use_configured_state": True}, metadata={"help": 'DO NOT MODIFY.'})
 
 @dataclass
@@ -298,12 +299,6 @@ class SavePeftModelCallback(transformers.TrainerCallback):
             pytorch_model_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
             if os.path.exists(pytorch_model_path):
                 os.remove(pytorch_model_path)
-            try:
-                if os.path.exists(os.path.join(checkpoint_dir, f'global_step{state.global_step}')):
-                    print(f'Cleaning up global_step{state.global_step}...')
-                    shutil.rmtree(os.path.join(checkpoint_dir, f'global_step{state.global_step}'))
-            except Exception as e:
-                print(f'Failed to clean up global_step{state.global_step}: {e}')
         return checkpoint_dir
 
     def on_save(self, args, state, control, **kwargs):
@@ -500,12 +495,12 @@ class DataCollatorForCausalLM(object):
         # Tokenize
         tokenized_sources_with_prompt = self.tokenizer(
             sources,
-            truncation=True,
+            truncation=False,
             add_special_tokens=False,
         )
         tokenized_targets = self.tokenizer(
             targets,
-            truncation=True,
+            truncation=False,
             add_special_tokens=False,
         )
         # Build the input and labels for causal LM
@@ -552,25 +547,6 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
     """
     Make dataset and collator for supervised fine-tuning.
     Datasets are expected to have the following columns: { `input`, `output` }
-
-    Available datasets to be selected with `dataset` argument:
-        - alpaca, 52002 examples
-        - alpaca cleaned, 51942 examples
-        - chip2 (OIG), 210289 examples
-        - self-instruct, 82612 examples
-        - hh-rlhf (Anthropic), 160800 examples
-        - longform, 23.7k examples
-        - oasst1 (OpenAssistant) primary message tree only, 9,846 examples
-
-    Coming soon:
-        - unnatural instructions core, 66010 examples
-        - unnatural instructions full, 240670 examples
-        - alpaca-gpt4, 52002 examples
-        - unnatural-instructions-gpt4, 9000 examples
-        - supernatural-instructions, 69624 examples (same as paper with 100 ex/task more can be used)
-        - flan (FLAN v2), up to 20M examples available
-        - vicuna
-
     """
     def load_data(dataset_name):
         if os.path.exists(dataset_name):
@@ -628,16 +604,16 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
 def get_last_checkpoint(checkpoint_dir, accelerator):
     if os.path.isdir(checkpoint_dir):
         is_completed = os.path.exists(os.path.join(checkpoint_dir, 'completed'))
-        if is_completed: return None, True # already finished
+        if is_completed: return None, True # Already finished.
         max_step = 0
         for filename in os.listdir(checkpoint_dir):
             if os.path.isdir(os.path.join(checkpoint_dir, filename)) and filename.startswith('checkpoint-'):
                 max_step = max(max_step, int(filename.replace('checkpoint-', '')))
-        if max_step == 0: return None, is_completed # training started, but no checkpoint
+        if max_step == 0: return None, is_completed # Training started, but no checkpoint.
         checkpoint_dir = os.path.join(checkpoint_dir, f'checkpoint-{max_step}')
         accelerator.print(f"Found a previous checkpoint at: {checkpoint_dir}")
-        return checkpoint_dir, is_completed # checkpoint found!
-    return None, False # first training
+        return checkpoint_dir, is_completed # Checkpoint found!
+    return None, False # First training.
 
 def train():
     accelerator = Accelerator()
@@ -713,7 +689,7 @@ def train():
     if accelerator.state.distributed_type == DistributedType.DEEPSPEED:
         accelerator.print(f">>>>> DeepSpeed training with ZeRO stage {accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage']}... <<<<<")
 
-    # Callback
+    # Callback.
     if not args.full_finetune:
         trainer.add_callback(SavePeftModelCallback(trainer, args))
 
@@ -745,30 +721,37 @@ def train():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
         all_metrics.update(metrics)
-    # Full fine-tune saving
+    # Full fine-tune saving.
     if args.full_finetune:
         accelerator.wait_for_everyone()
-        accelerator.print("Saving full fine-tuned model...")
-        if getattr(trainer, "deepspeed"):
-            accelerator.print('>>>>> DeepSpeed saving... <<<<<')
-            state_dict = accelerator.get_state_dict(trainer.deepspeed)
-            unwrapped_model = accelerator.unwrap_model(trainer.deepspeed)
-        else:
-            state_dict = accelerator.get_state_dict(trainer.model)
-            unwrapped_model = accelerator.unwrap_model(trainer.model)
         if accelerator.is_main_process:
+            print("Saving full fine-tuned model...")
             save_dir = os.path.join(args.output_dir, "final")
-            unwrapped_model.save_pretrained(save_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors, max_shard_size=args.max_shard_size)
-            tokenizer.save_pretrained(save_dir)
+        final_model_dir = os.path.join(args.output_dir, f"checkpoint-{args.max_steps}")
+        if os.path.isdir(final_model_dir):
+            if accelerator.is_main_process:
+                print("Checkpoint already saved by the trainer, moving it to the target directory...")
+                shutil.move(final_model_dir, save_dir)
+        else:
+            if getattr(trainer, "deepspeed"):
+                accelerator.print('>>>>> DeepSpeed saving... <<<<<')
+                state_dict = accelerator.get_state_dict(trainer.deepspeed)
+                unwrapped_model = accelerator.unwrap_model(trainer.deepspeed)
+            else:
+                state_dict = accelerator.get_state_dict(trainer.model)
+                unwrapped_model = accelerator.unwrap_model(trainer.model)
+            if accelerator.is_main_process:
+                unwrapped_model.save_pretrained(save_dir, state_dict=state_dict, safe_serialization=args.save_as_safetensors, max_shard_size=args.max_shard_size)
+                tokenizer.save_pretrained(save_dir)
         accelerator.wait_for_everyone()
-    # Evaluation
+    # Evaluation.
     if args.do_eval:
         logger.info("*** Evaluate ***")
         metrics = trainer.evaluate(metric_key_prefix="eval")
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
         all_metrics.update(metrics)
-    # Prediction
+    # Prediction.
     if args.do_predict:
         logger.info("*** Predict ***")
         prediction_output = trainer.predict(test_dataset=data_module['predict_dataset'], metric_key_prefix="predict")

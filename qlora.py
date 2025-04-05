@@ -229,12 +229,9 @@ def is_deepspeed_zero_3(accelerator):
     return state.distributed_type == DistributedType.DEEPSPEED and state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage'] == 3
 
 def find_all_linear_names(args, model):
-    nn_classes = (torch.nn.Linear, bnb.nn.Linear4bit, bnb.nn.Linear8bitLt)
-    if args.additional_special_tokens:
-        nn_classes += (torch.nn.Embedding,)
     lora_module_names = set()
     for name, module in model.named_modules():
-        if isinstance(module, nn_classes):
+        if args.additional_special_tokens and isinstance(module, torch.nn.Embedding) or "Linear" in module.__class__.__name__ and hasattr(module, "in_features"):
             lora_module_names.add(name.split(".")[-1])
 
     if not args.additional_special_tokens:
@@ -332,39 +329,47 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         device_map = "auto"
 
     # If we are in a distributed setting, we need to set the device map and max memory per device
-    if os.environ.get('LOCAL_RANK') is not None:
-        local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+    if os.environ.get("LOCAL_RANK") is not None:
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         if not is_deepspeed_zero_3(accelerator):
-            device_map = {'': local_rank}
-        max_memory = {'': max_memory[local_rank]}
+            device_map = {"": local_rank}
+        max_memory = {"": max_memory[local_rank]}
 
     compute_dtype = torch.bfloat16 if args.bf16 else torch.float16 if args.fp16 else torch.float32
     if compute_dtype == torch.float16 and is_ipex_available() and torch.xpu.is_available():
         compute_dtype = torch.bfloat16
-        accelerator.print('Intel XPU does not support float16 yet, so switched to bfloat16.')
-    if compute_dtype == torch.float16:
+        accelerator.print("Intel XPU does not support float16 yet, so switched to bfloat16.")
+    elif compute_dtype == torch.float16:
         if torch.cuda.is_bf16_supported():
             accelerator.print("=" * 80 + "\nYour GPU supports bfloat16, you can accelerate training with it by passing argument `--bf16`.\n" + "=" * 80)
 
-    accelerator.print(f'Loading base model {args.model_name_or_path}...')
+    accelerator.print(f"Loading base model \"{args.model_name_or_path}\"...")
 
     load_args = {}
     if isinstance(args.model_max_context, int):
-        load_args['max_position_embeddings'] = args.model_max_context
+        load_args["max_position_embeddings"] = args.model_max_context
         accelerator.print(f"Model max context length adjusted to {args.model_max_context} tokens.")
     if isinstance(args.rope_scaling_type, str) and (isinstance(args.rope_scaling_factor, float) or isinstance(args.rope_scaling_factor, int)):
         rope_scaling_setting_dict = {"type": args.rope_scaling_type, "factor": float(args.rope_scaling_factor)}
-        load_args['rope_scaling'] = rope_scaling_setting_dict
+        load_args["rope_scaling"] = rope_scaling_setting_dict
         accelerator.print(f"Using rope scaling with setting: {rope_scaling_setting_dict}")
 
-    if args.bits in [4, 8]:
-        accelerator.print(f"Using {args.bits} bits quantization.")
-        load_args['quantization_config'] = BitsAndBytesConfig(
+    config = transformers.AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=args.trust_remote_code)
+    quantization_config = getattr(config, "quantization_config", None)
+    if quantization_config is not None:
+        args.bits = quantization_config["bits"]
+        accelerator.print(f"Using an already quantized model with {args.bits} bits {quantization_config["quant_method"]} quantization.")
+    elif args.bits < 16:
+        if args.bits not in {4, 8}:
+            raise ValueError(f"{args.bits} bits not supported for BnB quantization!")
+        accelerator.print(f"Using a not quantized model with {args.bits} bits BnB quantization.")
+        load_args["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=args.bits == 4,
             load_in_8bit=args.bits == 8,
             llm_int8_threshold=6.0,
             llm_int8_has_fp16_weight=False,
             bnb_4bit_compute_dtype=compute_dtype,
+            bnb_4bit_quant_storage=compute_dtype,
             bnb_4bit_use_double_quant=args.double_quant,
             bnb_4bit_quant_type=args.quant_type,
         )
@@ -373,7 +378,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
     accelerator.print(f"Using compute dtype {compute_dtype}.")
 
     if not is_deepspeed_zero_3(accelerator):
-        load_args['device_map'] = device_map
+        load_args["device_map"] = device_map
 
     if args.use_flash_attention_2:
         load_args["attn_implementation"] = "flash_attention_2"
@@ -389,8 +394,8 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
 
     label_names = transformers.utils.generic.find_labels(model.__class__)
 
-    setattr(model, 'model_parallel', True)
-    setattr(model, 'is_parallelizable', True)
+    setattr(model, "model_parallel", True)
+    setattr(model, "is_parallelizable", True)
 
     model.config.torch_dtype = compute_dtype
 
@@ -418,7 +423,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         accelerator.print(f"Adding additional special tokens: {args.additional_special_tokens}")
         add_special_tokens_smart({"additional_special_tokens": args.additional_special_tokens}, tokenizer, model, accelerator)
 
-    if not args.full_finetune and args.bits in [4, 8]:
+    if not args.full_finetune and args.bits < 16:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
 
     if args.gradient_checkpointing and hasattr(model, 'gradient_checkpointing_enable'):
@@ -432,7 +437,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
             accelerator.print("Adding LoRA modules...")
             modules = find_all_linear_names(args, model)
             accelerator.print("Targeting modules:", modules)
-            config = LoraConfig(
+            lora_config = LoraConfig(
                 r=args.lora_r,
                 lora_alpha=args.lora_alpha,
                 target_modules=modules,
@@ -442,7 +447,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
                 use_rslora=True,
             )
             model.enable_input_require_grads()
-            model = get_peft_model(model, config)
+            model = get_peft_model(model, lora_config)
 
     for name, module in model.named_modules():
         if isinstance(module, LoraLayer) or 'norm' in name or ('lm_head' in name or 'embed_tokens' in name) and hasattr(module, 'weight'):
@@ -526,7 +531,13 @@ class DataCollatorForCausalLM(object):
         if self.predict_with_generate:
             raise NotImplementedError("Predict with generate isn't implemented for messages format!")
 
-        data_dict = self.tokenizer.apply_chat_template([message["messages"] for message in instances], return_tensors="pt", padding=True, return_dict=True, return_assistant_tokens_mask=True)
+        data_dict = self.tokenizer.apply_chat_template(
+            [message["messages"] for message in instances],
+            return_tensors="pt",
+            padding=True,
+            return_dict=True,
+            return_assistant_tokens_mask=not self.train_on_source,
+        )
         data_dict["labels"] = data_dict["input_ids"]
         if not self.train_on_source:
             assistant_masks = data_dict.pop("assistant_masks")
@@ -597,20 +608,20 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
 
     # Split train/eval, reduce size.
     if args.do_eval or args.do_predict:
-        if 'eval' in dataset:
-            eval_dataset = dataset['eval']
+        if "eval" in dataset:
+            eval_dataset = dataset["eval"]
         else:
-            accelerator.print('Splitting train dataset to train and validation according to `eval_dataset_size`...')
+            accelerator.print("Splitting train dataset to train and validation according to `eval_dataset_size`...")
             dataset = dataset["train"].train_test_split(
                 test_size=args.eval_dataset_size, shuffle=True, seed=42
             )
-            eval_dataset = dataset['test']
+            eval_dataset = dataset["test"]
         if args.max_eval_samples is not None and len(eval_dataset) > args.max_eval_samples:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
         if args.group_by_length:
             eval_dataset = eval_dataset.map(get_item_length)
     if args.do_train:
-        train_dataset = dataset['train']
+        train_dataset = dataset["train"]
         if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
             train_dataset = train_dataset.select(range(args.max_train_samples))
         if args.group_by_length:
@@ -631,14 +642,14 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args, accelera
 
 def get_last_checkpoint(checkpoint_dir, accelerator):
     if os.path.isdir(checkpoint_dir):
-        is_completed = os.path.exists(os.path.join(checkpoint_dir, 'completed'))
+        is_completed = os.path.exists(os.path.join(checkpoint_dir, "completed"))
         if is_completed: return None, True # Already finished.
         max_step = 0
         for filename in os.listdir(checkpoint_dir):
-            if os.path.isdir(os.path.join(checkpoint_dir, filename)) and filename.startswith('checkpoint-'):
-                max_step = max(max_step, int(filename.replace('checkpoint-', '')))
+            if os.path.isdir(os.path.join(checkpoint_dir, filename)) and filename.startswith("checkpoint-"):
+                max_step = max(max_step, int(filename.replace("checkpoint-", "")))
         if max_step == 0: return None, is_completed # Training started, but no checkpoint.
-        checkpoint_dir = os.path.join(checkpoint_dir, f'checkpoint-{max_step}')
+        checkpoint_dir = os.path.join(checkpoint_dir, f"checkpoint-{max_step}")
         accelerator.print(f"Found a previous checkpoint at: {checkpoint_dir}")
         return checkpoint_dir, is_completed # Checkpoint found!
     return None, False # First training.
@@ -650,10 +661,8 @@ def train():
 
     # Args checks.
     assert not extra_args, "You passed extra args which are not used, please remove these args: " + str(extra_args)
-    assert training_args.bits in [4, 8, 16, 32], f"Invalid bits value \"{training_args.bits}\", please use one of [4, 8, 16, 32]."
-    if is_deepspeed_zero_3(accelerator) and training_args.bits not in [16, 32]:
-        training_args.bits = 16
-        accelerator.print("You can't use 4 or 8 bits when training with DeepSpeed ZeRO stage 3, automatically set bits to 16.")
+    valid_bits = {4, 8, 16, 32}
+    assert training_args.bits in valid_bits, f"Invalid bits value \"{training_args.bits}\", please use one of {valid_bits}."
 
     # Replace generation config.
     training_args.generation_config = transformers.GenerationConfig(**vars(generation_args))
@@ -667,17 +676,17 @@ def train():
 
     # Args checks again.
     if is_deepspeed_zero_3(accelerator) and (args.bf16 or args.fp16):
-        assert accelerator.state.deepspeed_plugin.deepspeed_config['zero_optimization']['stage3_gather_16bit_weights_on_model_save'], \
+        assert accelerator.state.deepspeed_plugin.deepspeed_config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"], \
         "You are using (b)float16 training with DeepSpeed ZeRO stage 3, but you didn't allow 16 bits weights gathering, please pass `--zero3_save_16bit_model True` to `accelerate launch`."
 
     if args.full_finetune:
-        assert args.bits in [16, 32], "You are doing full fine-tune but you are not using 16 or 32 bits."
+        assert args.bits in {16, 32}, "You are doing full fine-tune but you are not using 16 or 32 bits."
 
-    rope_scaling_valid_types = ['linear', 'dynamic']
+    rope_scaling_valid_types = {"linear", "dynamic"}
     if args.rope_scaling_type is not None or args.rope_scaling_factor is not None:
-        assert args.rope_scaling_type is not None, "You have rope scaling factor set but you didn't set a rope scaling type, please use one of " + str(rope_scaling_valid_types) + "."
+        assert args.rope_scaling_type is not None, f"You have rope scaling factor set but you didn't set a rope scaling type, please use one of {rope_scaling_valid_types}."
         assert args.rope_scaling_factor is not None, "You have rope scaling type set but you didn't set a rope scaling factor, please use any floating point number > 1."
-        assert args.rope_scaling_type in rope_scaling_valid_types, "Your rope scaling type setting is not valid, please use one of " + str(rope_scaling_valid_types) + "."
+        assert args.rope_scaling_type in rope_scaling_valid_types, f"Your rope scaling type setting is not valid, please use one of {rope_scaling_valid_types}."
         assert isinstance(args.rope_scaling_factor, float) or isinstance(args.rope_scaling_factor, int), "Your rope scaling factor setting is not a number."
         assert args.rope_scaling_factor > 1, "Your rope scaling factor is less than or equal to 1, please use a higher setting."
 
@@ -708,6 +717,7 @@ def train():
 
     training_args.label_names = label_names
     args.label_names = label_names
+    training_args.bits = args.bits
 
     model.config.use_cache = False
     accelerator.print("Loaded model.")

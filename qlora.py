@@ -527,11 +527,12 @@ class DataCollatorForCausalLM(object):
             raise NotImplementedError("Predict with generate isn't implemented for messages format!")
 
         data_dict = self.tokenizer.apply_chat_template([message["messages"] for message in instances], return_tensors="pt", padding=True, return_dict=True, return_assistant_tokens_mask=True)
+        data_dict["labels"] = data_dict["input_ids"]
         if not self.train_on_source:
             assistant_masks = data_dict.pop("assistant_masks")
             if not assistant_masks.any(-1).all():
                 raise ValueError("Some of the assistant masks for this batch doesn't contain any assistant generations, the chat template may be wrong!")
-            data_dict["labels"] = data_dict["input_ids"].masked_fill(assistant_masks == 0, IGNORE_INDEX)
+            data_dict["labels"] = data_dict["labels"].masked_fill(assistant_masks == 0, IGNORE_INDEX)
         attention_mask = data_dict["attention_mask"]
         data_dict["position_ids"] = (attention_mask.cumsum(-1) - 1) * attention_mask
         return data_dict

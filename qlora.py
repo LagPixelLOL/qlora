@@ -21,20 +21,21 @@ from torch.nn.utils.rnn import pad_sequence
 import argparse
 import transformers
 from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    AutoModelForImageTextToText,
     set_seed,
+    AutoConfig,
+    AutoTokenizer,
     Seq2SeqTrainer,
     BitsAndBytesConfig,
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
 )
 from datasets import load_dataset, Dataset, DatasetDict
 
 from peft import (
-    prepare_model_for_kbit_training,
+    PeftModel,
     LoraConfig,
     get_peft_model,
-    PeftModel,
+    prepare_model_for_kbit_training,
 )
 from peft.tuners.lora import LoraLayer
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
@@ -355,7 +356,7 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
         load_args["rope_scaling"] = rope_scaling_setting_dict
         accelerator.print(f"Using rope scaling with setting: {rope_scaling_setting_dict}")
 
-    config = transformers.AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=args.trust_remote_code)
+    config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=args.trust_remote_code)
     quantization_config = getattr(config, "quantization_config", None)
     if quantization_config is not None:
         args.bits = quantization_config["bits"]
@@ -383,14 +384,16 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
 
     if args.use_flash_attention_2:
         load_args["attn_implementation"] = "flash_attention_2"
-        
-    architecture = config.architectures[0]
-    if architecture.endswith("ForCausalLM"):
-        loader_class = AutoModelForCausalLM
-    elif architecture.endswith("ForConditionalGeneration"):
-        loader_class = AutoModelForImageTextToText
+
+    for architecture in config.architectures:
+        if architecture.endswith("ForCausalLM"):
+            loader_class = AutoModelForCausalLM
+            break
+        elif architecture.endswith("ForConditionalGeneration"):
+            loader_class = AutoModelForImageTextToText
+            break
     else:
-        raise ValueError(f"Unknown architecture \"{architecture}\"!")
+        raise ValueError(f"Unknown architectures {config.architectures}!")
 
     model = loader_class.from_pretrained(
         args.model_name_or_path,

@@ -23,6 +23,7 @@ import transformers
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     set_seed,
     Seq2SeqTrainer,
     BitsAndBytesConfig,
@@ -311,7 +312,7 @@ class SavePeftModelCallback(transformers.TrainerCallback):
                 print(f"Error occurred while moving the final output to the target directory: {e}")
         if accelerator.is_local_main_process:
             os.makedirs(args.output_dir, exist_ok=True)
-            fname = os.path.join(args.output_dir, 'completed')
+            fname = os.path.join(args.output_dir, "completed")
             with open(fname, "a", encoding="utf8"):
                 os.utime(fname, None)
 
@@ -382,8 +383,16 @@ def get_accelerate_model(args, checkpoint_dir, accelerator):
 
     if args.use_flash_attention_2:
         load_args["attn_implementation"] = "flash_attention_2"
+        
+    architecture = config.architectures[0]
+    if architecture.endswith("ForCausalLM"):
+        loader_class = AutoModelForCausalLM
+    elif architecture.endswith("ForConditionalGeneration"):
+        loader_class = AutoModelForImageTextToText
+    else:
+        raise ValueError(f"Unknown architecture \"{architecture}\"!")
 
-    model = AutoModelForCausalLM.from_pretrained(
+    model = loader_class.from_pretrained(
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         max_memory=max_memory,

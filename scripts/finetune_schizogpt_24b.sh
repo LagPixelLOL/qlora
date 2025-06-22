@@ -1,0 +1,39 @@
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True accelerate launch --mixed_precision bf16 --num_processes 8 --num_cpu_threads_per_process 1 --use_deepspeed --gradient_accumulation_steps 2 --zero_stage 2 --zero3_save_16bit_model True qlora.py \
+    --model_name_or_path /root/data/llms/Mistral-Small-3.1-24B-Base-2503 \
+    --output_dir /root/data/train/output/SchizoGPT-24B \
+    --logging_steps 10 \
+    --save_strategy steps \
+    --data_seed 42 \
+    --save_steps 116 \
+    --save_total_limit 10 \
+    --eval_strategy steps \
+    --eval_dataset_size 512 \
+    --per_device_eval_batch_size 1 \
+    --max_new_tokens 512 \
+    --dataloader_num_workers 1 \
+    --group_by_length \
+    --logging_strategy steps \
+    --do_train \
+    --do_eval \
+    --lora_r 64 \
+    --lora_alpha 16 \
+    --double_quant \
+    --quant_type nf4 \
+    --bf16 \
+    --bits 4 \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type constant \
+    --adam8bit \
+    --gradient_checkpointing \
+    --dataset /root/r-chatgpt-general-dump/merged_strings_train.jsonl \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 2 \
+    --max_steps 1152 \
+    --eval_steps 116 \
+    --learning_rate 0.0002 \
+    --adam_beta2 0.999 \
+    --max_grad_norm 0.3 \
+    --lora_dropout 0.1 \
+    --weight_decay 0.0 \
+    --seed 0 \
+    --additional_special_tokens '<username>' '<message>'
